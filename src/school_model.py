@@ -5,6 +5,7 @@ from mesa import Model
 from scipy import stats 
 import math
 import os
+import warnings
 
 
 #Shapely Imports
@@ -59,6 +60,8 @@ def find_room_type(room_agents, room_type):
 
 
 
+
+
 def load_map(file_path):
     '''
     This is specific to the current school layout at this point, should be modified later in the future
@@ -89,7 +92,6 @@ def load_map(file_path):
 
 
 
-
 class Human(GeoAgent):
             
     # plot config
@@ -103,13 +105,49 @@ class Human(GeoAgent):
     symptoms = False
     
     
-    #dummy config for data collection
+    # dummy config for data collection
     viral_load = None
+    
+    
+    
+    # UPDATE 10/16: move stats to class level
+     
+
+    
+    
+    
+    
+    # infectious curve config
+    ###################################### 
+    # based on gamma fit of 10000 R code points
+    shape, loc, scale = (20.16693271833812, -12.132674385322815, 0.6322296057082886)
+
+    # infectious curve
+    infective_df = pd.DataFrame(
+        {'x': range(-10,9),
+         'gamma': list(stats.gamma.pdf(range(-10,9), a=shape, loc=loc, scale=scale))
+        }
+    )
+    #########################################
+
     
     def __init__(self, unique_id, model, shape, room, health_status = 'healthy'):
         super().__init__(unique_id, model, shape)
         self.health_status = health_status
-        self.incubation_time = stats.gamma(5.807, 0.948).rvs(1)[0]
+        
+        # symptom onset countdown config
+        ##########################################
+        # From 10000 lognorm values in R
+        shape, loc, scale =  (0.6432659248014824, -0.07787673726582335, 4.2489459496009125)
+
+        lognormal_dist = stats.lognorm.rvs(shape, loc, scale, size=1)
+        num_days = min(np.round(lognormal_dist, 0)[0], 17) # failsafe to avoid index overflow
+        self.symptom_countdown = int(num_days)
+        #######################################
+        
+        
+
+        
         self.room = room
         self.x = self.shape.x
         self.y = self.shape.y
@@ -123,65 +161,92 @@ class Human(GeoAgent):
         self.shape = new_shape
         self.x = self.shape.x
         self.y = self.shape.y
+        
     
     def __update(self):
+        # UPDATE 10/16: reorganized things from Bailey's update
+        # TODO: currently mask has no functionality other than reducing transmission distance, is this faithful?
+
+        # mask wearing reduces droplet transmission max range
+        # infection above max range is considered as aerosal transmission
+        if self.mask and not (self.model.activity[self.room.schedule_id] == 'lunch'):
+            neighbors = self.model.grid.get_neighbors_within_distance(self, 6)
+        else:
+            neighbors = self.model.grid.get_neighbors_within_distance(self, 18)
+
         
-        
+        # UPDATE 10/16: infectious has made obsolete due to infectious curve covering after symptom onset fit
+        # credit Bailey Man
+        '''
         if self.health_status == 'infectious':
-            # update room aerosal viral concentration:
-            # Checks if infectious agent's neighbors are within 3 
-            neighbors = self.model.grid.get_neighbors_within_distance(self, 12)
-            if self.mask and not (self.model.activity[self.room.schedule_id] == 'lunch'):
-                neighbors = self.model.grid.get_neighbors_within_distance(self, 4)
+            #TODO: sliding Distance calculation for neighbor infection
+            # a scale for health status
+
 
             # Loop through infected agent's neighbors that are within 3
+        
+            for neighbor in neighbors:
+                
+                ### 
+                #temp value, replace this with distance -> viral load -> infection_prob calculation eventually
+                temp_prob = .857 # previous value used
+
+                # Check class is Human                            
+                if issubclass(type(neighbor), Human):
+
+                    infective_prob = np.random.choice ([True, False], p = [temp_prob, 1 - temp_prob])
+                    if infective_prob and self.__check_same_room(neighbor):
+                        neighbor.health_status = 'exposed'
+        '''    
+
+                        
+                        
+                        
+        if self.health_status == 'exposed':
+
+            # normalize symptom countdown value to infectious distribution value
+            # 0 being most infectious
+            # either -10 or 8 is proven to be too small of a chance to infect others, thus covering asympotmatic case
+            countdown_norm = min(8, max(-10, 0 - self.symptom_countdown))
+            temp_prob = self.infective_df[self.infective_df['x'] == countdown_norm]['gamma'].iloc[0]
+
+            
             for neighbor in neighbors:
 
                 # Check class is Human                            
                 if issubclass(type(neighbor), Human):
-                    protection_prob = True
-                    if neighbor.mask:
-                        protection_prob = np.random.choice ([True, False], p = [0.857, 1-0.857])
-                        if self.model.activity[self.room.schedule_id] == 'lunch':
-                            protection_prob = True
+                    if neighbor.unique_id != self.unique_id:                   
+                        # TODO: update this to a more realistic scale
+                        agent_distance = self.shape.distance(neighbor.shape)
+
+                        dist_bias = 1/agent_distance
 
 
-                    same_room = True
-                    
-                    # wall hard blocking transmission should only be an edge case if agents are in classroom
-                    if self.model.activity[self.room.schedule_id] == 'class':
-                        same_room = (self.room.unique_id == neighbor.room.unique_id)
-                    if same_room and (neighbor.health_status == 'healthy'):
-                        prob_exposed = np.random.choice ([True, False], p = [0.5, 0.5])                                    
-                        if prob_exposed and protection_prob:
+                        # row a dice of temp_prob chance to expose other agent
+                        infective_prob = np.random.choice ([True, False], p = [temp_prob*dist_bias, 1 - (temp_prob*dist_bias)])
+
+                        if infective_prob and self.__check_same_room(neighbor):
                             neighbor.health_status = 'exposed'
- 
-            
-    
-            
-        if self.health_status == "exposed":
-            self.incubation_time -= 0.00347222
 
-            # modified infection based on step function update in student class
-            if self.incubation_time <= 2:
-
-                
-                # TODO: literature proof for chance of testing positive ###
-                prob_infect = np.random.choice([True, False], p=[0.8, 0.2])
-                if prob_infect:
-                    self.health_status = "infectious"
-                else:
-                    self.health_status = "healthy"
-                    self.incubation_time = stats.gamma(5.807, 0.948).rvs(1)[0]
-
-
-        if self.health_status == "infectious" and not self.symptoms:
-            self.incubation_time -= 0.00347222
-            if self.incubation_time <= 0:
-                self.model.infected_count += 1    
-                self.symptoms = True
-    
-    
+                        
+    def __check_same_room(self, other_agent):
+        '''
+        check if current agent and other agent is in the same room
+        
+        the purpose of this function is to make sure to eliminate edge cases that one agent near the wall of its room
+        infects another agent in the neighboring room
+        
+        this is at this iteration of code only implemented for class purpose, as unique id check is way more efficient
+        
+        later implementation should add attribute to human agent for current room
+        
+            other_agent: other agent to check
+            returns: boolean value for if the two agents are in the same room
+        '''
+        same_room = True
+        if self.model.activity[self.room.schedule_id] == 'class':
+            same_room = (self.room.unique_id == other_agent.room.unique_id)
+        return same_room
     
     
     def __move(self, move_spread = 12, location = None):
@@ -191,7 +256,7 @@ class Human(GeoAgent):
         The radius of the circle is determined by agent's move_factor.
         Assigns new point to override current point.
         '''   
-        # a scale for health status
+        
         if not location:
             location = self.room
         move_spread = location.shape.intersection(self.shape.buffer(40))
@@ -267,12 +332,6 @@ class Student(Human):
                     self.update_shape(self.seat)
                     self.out_of_place = False
                     
-            # update room aerosal virus concentration 
-            if self.health_status == 'infectious':
-                if self.mask:
-                    self.room.viral_load += (0.01*0.01)
-                else:
-                    self.room.viral_load += 0.01
                 
                 
         # case 2: student in recess            
@@ -304,9 +363,6 @@ class Student(Human):
                     if self.out_of_place:
                         self.update_shape(self.seat)
                         self.out_of_place = False
-                # update room aerosal virus concentration 
-                if self.health_status == 'infectious':
-                    self.room.viral_load += 0.01
 
                     
             #in cafeteria lunch case
@@ -330,9 +386,6 @@ class Student(Human):
                     self.model.lunchroom.seats.append(self.shape)
                     self.lunch_count = -1
 
-                    
-                if self.health_status == 'infectious':
-                    self.model.lunchroom.viral_load += 0.01
             
                 self.lunch_count += 1
     
@@ -361,12 +414,6 @@ class Teacher(Human):
     def step(self):
         self._Human__update()
         self._Human__move()
-        # update room aerosal virus concentration 
-        if self.health_status == 'infectious':
-            if self.mask:
-                self.room.viral_load += (0.01*0.01)
-            else:
-                self.room.viral_load += 0.01
                 
         
 
@@ -394,8 +441,22 @@ class Classroom(GeoAgent):
         self.schedule_id = None
     
     def step(self):
+        # roll weighted probability for current step having in-class activity
         self.prob_move = np.random.choice([True, False], p = [0.2, 0.8])
-        for agent in self.model.grid.get_intersecting_agents(self):
+        
+        
+        # UPDATE 10/16: move aerosal update entirely to room object, better for future room volume inclusion
+        # TODO: this aerosal version is very immature! 
+        
+        occupants = [a for a in list(self.model.grid.get_intersecting_agents(self)) if issubclass(type(a), Human)]
+        # this upates room viral_load to an arbitrary that's scaled with num of covid patients and area of room
+        # should change to volume of room later
+        self.viral_load += len([a for a in occupants if a.health_status != "healthy"])/self.shape.area
+        
+        # Don't run anything at this point
+        # intended for aerosal transmission
+        '''
+        for agent in occupants:
             ### TODO: check literature for aerosal infection ###
             if issubclass(type(agent), Human):
                 prob_exposed = self.viral_load/100
@@ -407,10 +468,13 @@ class Classroom(GeoAgent):
                 
                 if np.random.choice([True, False], p = [prob_exposed, 1-prob_exposed]):
                     agent.health_status = 'exposed'
+        '''
+
+                    
         
         # ventilation natrually
         ### TODO: check literature for aerosal infection ###
-        self.viral_load = max(self.viral_load-0.02, 0)
+        self.viral_load = max(self.viral_load-0.002, 0)
         
         if self.schedule_id is not None:
             if "classroom" in self.room_type:
@@ -422,7 +486,7 @@ class Classroom(GeoAgent):
         
     def ventilate(self):
         ### TODO: check literature for aerosal infection ###
-        self.viral_load = max(self.viral_load-0.5, 0)
+        self.viral_load = max(self.viral_load-0.05, 0)
         
         
     def generate_seats(self, N, width):
@@ -465,6 +529,9 @@ class School(Model):
     
     def __init__(self, map_path, schedule_path, grade_N, KG_N, preschool_N, special_education_N, 
                  faculty_N, seat_dist, init_patient=3, attend_rate=1, mask_prob=0.516, inclass_lunch=False, username="jleiucsd"):
+        # zipcode etc, for access of more realistic population from KG perhaps
+        
+        
         
         # model param init
         self.__mask_prob = mask_prob
@@ -475,19 +542,7 @@ class School(Model):
 
         
         
-        # output path init
-        '''
-        self.path = "/oasis/scratch/comet/{}/temp_project/".format(username) +\
-        "output" +\
-        "_attendrate_" + str(attend_rate) +\
-        "_maskprob_" + str(self.__mask_prob) +\
-        "_inclasslunch_" + str(self.inclass_lunch)
-        
-        try:
-            os.mkdir(self.path)
-        except OSError:
-            pass
-        '''
+
 
         # mesa model init
         self.running = True
@@ -631,6 +686,7 @@ class School(Model):
 
         # dump remaining teacher to faculty lounge
         for f_lounge in find_room_type(self.room_agents, "faculty_lounge"):
+            f_lounge.schedule_id = self.schedule_ids[0]
             
             for i in range(self.__faculty_N):
 
@@ -663,17 +719,24 @@ class School(Model):
         
         
         
-    def add_N_patient(self, N):
+    def add_N_patient(self, N): 
         patients = random.sample([a for a in self.schedule.agents if isinstance(a, Student)], N)
         for p in patients:
-            p.health_status = "infectious"
+            p.health_status = "exposed"
             p.asymptomatic = True
-        self.infected_count += N
     
     
     def show(self):
+        '''
+        plot current step visualization
+        deprecated since end of model visualization update
+        '''
+        
+        # UPDATE 10/16: add deprecation warning
+        message  = "this function is no longer used for performance issues, check output_image.py for end of model visualization"
+        warnings.warn(message, DeprecationWarning)
 
-        ### TODO: update viral load to based on literature!! ###
+
         school_geometry = gpd.GeoSeries([a.shape for a in self.room_agents])
         school_map = gpd.GeoDataFrame({"viral_load" : [min(a.viral_load, 5) for a in self.room_agents]})
         school_map.geometry = school_geometry
@@ -685,48 +748,48 @@ class School(Model):
         hour = 9 + self.step_count*5//60 # assume plot start at 9am
         minute = self.step_count*5%60
         plt.title("Iteration: Day {}, ".format(self.day_count + 1) + "%d:%02d" % (hour, minute), fontsize=30)
-        
-        '''
-        img_path = self.path + "/outputimages"
-        try:
-            os.mkdir(img_path)
-        except OSError:
-            pass
-        fileout = img_path + "/" + str(self.day_count + 1) + '_' + ("%03d" % (self.step_count)) + ".png"
-        
-        plt.savefig(fileout)
-        # Clear the current axes.
-        plt.cla() 
-        # Clear the current figure.
-        plt.clf() 
-        # Closes all the figure windows.
-        plt.close('all')
-        # force clear catch 
-        gc.collect()
-        '''
+
         
     
     def __update_day(self):
         '''
         update incubation time, reset viral_load, remove symptomatic agents, etc for end of day
         '''
-        steps_in_day = 60*24/5
+
         
         for a in self.schedule.agents[:]:
             if issubclass(type(a), Human):
-                if a.health_status == "exposed":
-                    a.incubation_time -= 0.00347222*(steps_in_day - self.step_count)
-                     
-                elif a.health_status == "infectious" and a.symptoms:
+
+                    
+                if a.symptoms:
+                    # remove agent if symptom onset
                     if isinstance(a, Teacher):
+                        # assign a new teacher to position
                         new_teacher = self.idle_teachers.pop()
                         new_teacher.shape = a.shape
                         new_teacher.room = a.room
                         new_teacher.classroom = a.classroom
                     self.schedule.remove(a)
                     self.grid.remove_agent(a)
+                    
+                # UPDATE 10/16: infectious made obsolete, end of day update rework
+                elif a.health_status == "exposed":
+                    a.symptom_countdown -= 1
+                    # calculate when symptoms begin to show using 0-15 density
+                    if a.symptom_countdown <= 0:
+                        if a.symptom_countdown == 0: 
+                            self.infected_count += 1
+                        # update model stat for total infected
+                        # negative countdown means this agent is asymptomatic
+                        
+                        if not a.asymptomatic:
+                            # this is a really small chance, however possible
+                            # set symtoms to true
+                            # next day this agent will be removed from the model
+                            a.symptoms = True
 
             else:
+                # reset viral_load of room agents
                 a.viral_load = 0
         
     def step(self):
@@ -735,6 +798,8 @@ class School(Model):
         '''
         if not self.schedule.steps:
             self.add_N_patient(self.init_patient)
+        
+        
         
         for i, row in self.schoolday_schedule.iterrows():
             self.activity = row
