@@ -1,3 +1,39 @@
+import os
+import warnings
+
+
+#Shapely Imports
+from shapely.geometry import Polygon, Point, LineString
+import shapely
+
+
+#Data Analysis 
+import geopandas as gpd
+import pandas as pd
+import numpy as np
+import random
+import csv
+
+
+#Plot
+import matplotlib.pyplot as plt
+import gc
+
+
+
+student_marker = 'o'
+student_colordict = {"healthy": '#00d420', 'exposed': '#f0e10c', 'infectious': '#a82e05'}
+student_edgedict = {"healthy": '#00d420', 'exposed': '#cf9e19', 'infectious': '#a82e05'}
+student_sizedict = {"healthy": 10, 'exposed': 12, 'infectious': 16}
+
+
+teacher_marker = '^'
+teacher_colordict = {"healthy": '#00d420', 'exposed': '#f0e10c', 'infectious': '#a82e05'}
+teacher_edgedict = {"healthy": '#009416', 'exposed': '#cf9e19', 'infectious': '#a82e05'}
+teacher_sizedict = {"healthy": 14, 'exposed': 16, 'infectious': 20}
+
+plt.rcParams["figure.figsize"] = (15,15)
+
 def load_map(file_path):
     '''
     This is specific to the current school layout at this point, should be modified later in the future
@@ -36,29 +72,17 @@ def load_map(file_path):
 
 
 
-def write_output(agent_df, model_df, map_path, username='jleiucsd'):
-    student_marker = 'o'
-    student_colordict = {"healthy": '#00d420', 'exposed': '#f0e10c', 'infectious': '#a82e05'}
-    student_edgedict = {"healthy": '#00d420', 'exposed': '#cf9e19', 'infectious': '#a82e05'}
-    student_sizedict = {"healthy": 10, 'exposed': 12, 'infectious': 16}
+def write_output(params_key, output_dfs, map_path, username='jleiucsd'):
 
-
-    teacher_marker = '^'
-    teacher_colordict = {"healthy": '#00d420', 'exposed': '#f0e10c', 'infectious': '#a82e05'}
-    teacher_edgedict = {"healthy": '#009416', 'exposed': '#cf9e19', 'infectious': '#a82e05'}
-    teacher_sizedict = {"healthy": 14, 'exposed': 16, 'infectious': 20}
     
     
+    param_dict = eval(params_key)
     
-    
-    attend_rate = 1
-    inclass_lunch = False
-
     output_path = "/oasis/scratch/comet/{}/temp_project/".format(username) +\
-    "output" +\
-    "_attendrate_" + str(attend_rate) +\
-    "_maskprob_" + str(mask_prob) +\
-    "_inclasslunch_" + str(inclass_lunch)
+    "output"
+    for param, val in param_dict.items():
+        if ('path' not in param) and ('N' not in param):
+            output_path += '_{}_'.format(param) + str(val)
 
     try:
         os.mkdir(output_path)
@@ -67,7 +91,7 @@ def write_output(agent_df, model_df, map_path, username='jleiucsd'):
 
     
     
-    
+    model_df, agent_df = output_dfs
     
     school_gdf = load_map(map_path)
     school_gdf = school_gdf.rename({'Id': 'AgentID'}, axis=1)
@@ -78,6 +102,7 @@ def write_output(agent_df, model_df, map_path, username='jleiucsd'):
         step_gdf = agent_gdf.loc[(i, slice(None)), :]
         show(i, step_gdf, school_gdf, output_path)
     
+    model_df.to_csv(output_path + '/model_val.csv', index=False)
     
     
     
@@ -142,6 +167,3 @@ def show(i, step_gdf, school_gdf, output_path):
     plt.close('all')
     # force clear catch 
     gc.collect()
-
-    
-    

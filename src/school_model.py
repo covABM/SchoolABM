@@ -100,9 +100,7 @@ class Human(GeoAgent):
     edgedict = {"healthy": '#00d420', 'exposed': '#cf9e19', 'infectious': '#a82e05'}
     sizedict = {"healthy": 5, 'exposed': 6, 'infectious': 8}
     
-    # disease config
-    asymptomatic = np.random.choice([True, False], p = [0.58/100, 1- (0.58/100)])
-    symptoms = False
+
     
     
     # dummy config for data collection
@@ -133,7 +131,16 @@ class Human(GeoAgent):
     
     def __init__(self, unique_id, model, shape, room, health_status = 'healthy'):
         super().__init__(unique_id, model, shape)
+        
+
+        
+        # disease config
         self.health_status = health_status
+        self.asymptomatic = np.random.choice([True, False], p = [0.58/100, 1- (0.58/100)])
+        self.symptoms = False
+        
+        # UPDATE 10/17: delay infection by 1 day to avoid infection explosion
+        self.infective = False
         
         # symptom onset countdown config
         ##########################################
@@ -202,7 +209,7 @@ class Human(GeoAgent):
                         
                         
                         
-        if self.health_status == 'exposed':
+        if self.health_status == 'exposed' and self.infective:
 
             # normalize symptom countdown value to infectious distribution value
             # 0 being most infectious
@@ -219,10 +226,13 @@ class Human(GeoAgent):
                         # TODO: update this to a more realistic scale
                         agent_distance = self.shape.distance(neighbor.shape)
 
-                        dist_bias = 1/agent_distance
+                        try:
+                            dist_bias = np.sqrt(min(1, 1/agent_distance))
+                        except:
+                            dist_bias = 1
 
 
-                        # row a dice of temp_prob chance to expose other agent
+                        # row a dice of temp_prob*dist_bias chance to expose other agent
                         infective_prob = np.random.choice ([True, False], p = [temp_prob*dist_bias, 1 - (temp_prob*dist_bias)])
 
                         if infective_prob and self.__check_same_room(neighbor):
@@ -724,6 +734,7 @@ class School(Model):
         for p in patients:
             p.health_status = "exposed"
             p.asymptomatic = True
+            p.infective = True
     
     
     def show(self):
@@ -774,6 +785,8 @@ class School(Model):
                     
                 # UPDATE 10/16: infectious made obsolete, end of day update rework
                 elif a.health_status == "exposed":
+                    # UPDATE 10/17: update infective delay if agent is not infective by end of day
+                    a.infective = True
                     a.symptom_countdown -= 1
                     # calculate when symptoms begin to show using 0-15 density
                     if a.symptom_countdown <= 0:
