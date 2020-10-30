@@ -68,7 +68,7 @@ iterations = 1
 # This in the process of becoming a user adjustable parameter, 
 # Hence, the alterative file path. 
 
-activity_params = '../config/activities.ini'
+activity_params = './config/activities.ini'
 parser_activity = configparser.ConfigParser()
 parser_activity.read(activity_params)
 seat_dist = int(parser_activity['CLASSROOM_REGULAR']['seat_dist'])
