@@ -70,7 +70,33 @@ def load_map(file_path):
 
 
 
+def output_to_csv(params_key, output_dfs, username='jleiucsd'):
 
+    
+    
+    param_dict = eval(params_key)
+    
+    output_path = "/oasis/scratch/comet/{}/temp_project/".format(username) +\
+    "output"
+    for param, val in param_dict.items():
+        if ('path' not in param) and ('N' not in param):
+            output_path += '_{}_'.format(param) + str(val)
+
+    try:
+        os.mkdir(output_path)
+    except OSError:
+        pass
+
+    
+    
+    model_df, agent_df = output_dfs
+    agent_df.to_csv(output_path + '/agent_val.csv')
+    model_df.to_csv(output_path + '/model_val.csv', index=False)
+    
+    
+    
+    
+    
 
 def write_output(params_key, output_dfs, map_path, username='jleiucsd'):
 
