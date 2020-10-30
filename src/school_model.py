@@ -20,12 +20,15 @@ import numpy as np
 import random
 import csv
 
+# Configuration Data and Files
+import configparser
 
 #Plot
 import matplotlib.pyplot as plt
 import gc
 
-
+# Prefix for config data
+config_file_path_prefix = '../config/'
 
 
 
@@ -95,10 +98,16 @@ def load_map(file_path):
 class Human(GeoAgent):
             
     # plot config
-    marker = 'o'
-    colordict = {"healthy": '#00d420', 'exposed': '#f0e10c', 'infectious': '#a82e05'}
-    edgedict = {"healthy": '#00d420', 'exposed': '#cf9e19', 'infectious': '#a82e05'}
-    sizedict = {"healthy": 5, 'exposed': 6, 'infectious': 8}
+    viz_ini_file = 'vizparams.ini'
+    
+    parser = configparser.ConfigParser()
+    parser.read(config_file_path_prefix + viz_ini_file)
+
+    default_section = parser['DEFAULT_PARAMS']
+    marker = default_section['marker']
+    colordict = {"healthy": default_section['healthy'], 'exposed': default_section['exposed'], 'infectious': default_section['infectious']}
+    edgedict = {"healthy": default_section['healthy_edge'], 'exposed': default_section['exposed_edge'], 'infectious': default_section['infectious_edge']}
+    sizedict = {"healthy": default_section['healthy_size'], 'exposed': default_section['exposed_size'], 'infectious': default_section['infectious_size']}
     
 
     
@@ -118,12 +127,17 @@ class Human(GeoAgent):
     # infectious curve config
     ###################################### 
     # based on gamma fit of 10000 R code points
-    shape, loc, scale = (20.16693271833812, -12.132674385322815, 0.6322296057082886)
+    disease_params_ini = 'diseaseparams.ini'
+    parser = configparser.ConfigParser()
+    parser.read(config_file_path_prefix + disease_params_ini)
+    incubation = parser['INCUBATION']
+    shape, loc, scale = (float(incubation['shape']), float(incubation['loc']), float(incubation['scale']))
 
     # infectious curve
+    range_data = list(range(int(incubation['lower_bound']), int(incubation['upper_bound']) + 1))
     infective_df = pd.DataFrame(
-        {'x': range(-10,9),
-         'gamma': list(stats.gamma.pdf(range(-10,9), a=shape, loc=loc, scale=scale))
+        {'x': range_data,
+         'gamma': list(stats.gamma.pdf(range_data, a=shape, loc=loc, scale=scale))
         }
     )
     #########################################
@@ -135,8 +149,13 @@ class Human(GeoAgent):
 
         
         # disease config
+        disease_params_ini = 'diseaseparams.ini'
+        parser = configparser.ConfigParser()
+        parser.read(config_file_path_prefix + disease_params_ini)
+
         self.health_status = health_status
-        self.asymptomatic = np.random.choice([True, False], p = [0.58/100, 1- (0.58/100)])
+        prevalence = float(parser['ASYMPTOMATIC_PREVALENCE']['prevalence'])
+        self.asymptomatic = np.random.choice([True, False], p = [prevalence, 1-prevalence])
         self.symptoms = False
         
         # UPDATE 10/17: delay infection by 1 day to avoid infection explosion
@@ -145,10 +164,16 @@ class Human(GeoAgent):
         # symptom onset countdown config
         ##########################################
         # From 10000 lognorm values in R
-        shape, loc, scale =  (0.6432659248014824, -0.07787673726582335, 4.2489459496009125)
+        countdown = parser['COUNTDOWN']
+        shape, loc, scale =  (float(countdown['shape']), float(countdown['loc']), float(countdown['scale']))
 
         lognormal_dist = stats.lognorm.rvs(shape, loc, scale, size=1)
-        num_days = min(np.round(lognormal_dist, 0)[0], 17) # failsafe to avoid index overflow
+
+        school_params_ini = 'schoolparams.ini'
+        parser = configparser.ConfigParser()
+        parser.read(config_file_path_prefix + school_params_ini)
+
+        num_days = min(np.round(lognormal_dist, 0)[0], int(parser['TIME']['days']) + 2) # failsafe to avoid index overflow
         self.symptom_countdown = int(num_days)
         #######################################
         
@@ -174,12 +199,16 @@ class Human(GeoAgent):
         # UPDATE 10/16: reorganized things from Bailey's update
         # TODO: currently mask has no functionality other than reducing transmission distance, is this faithful?
 
+        npi_params_ini = 'NPI.ini'
+        parser = configparser.ConfigParser()
+        parser.read(config_file_path_prefix + npi_params_ini)
+
         # mask wearing reduces droplet transmission max range
         # infection above max range is considered as aerosal transmission
         if self.mask and not (self.model.activity[self.room.schedule_id] == 'lunch'):
-            neighbors = self.model.grid.get_neighbors_within_distance(self, 6)
+            neighbors = self.model.grid.get_neighbors_within_distance(self, int(parser['MASKS']['infection_distance']))
         else:
-            neighbors = self.model.grid.get_neighbors_within_distance(self, 18)
+            neighbors = self.model.grid.get_neighbors_within_distance(self, int(parser['NO_NPI']['infection_distance']))
 
         
         # UPDATE 10/16: infectious has made obsolete due to infectious curve covering after symptom onset fit
@@ -214,7 +243,12 @@ class Human(GeoAgent):
             # normalize symptom countdown value to infectious distribution value
             # 0 being most infectious
             # either -10 or 8 is proven to be too small of a chance to infect others, thus covering asympotmatic case
-            countdown_norm = min(8, max(-10, 0 - self.symptom_countdown))
+
+            disease_params_ini = 'diseaseparams.ini'
+            parser = configparser.ConfigParser()
+            parser.read(config_file_path_prefix + disease_params_ini)
+            incubation = parser['INCUBATION']
+            countdown_norm = min(int(incubation['upper_bound']), max(int(incubation['lower_bound']), 0 - self.symptom_countdown))
             temp_prob = self.infective_df[self.infective_df['x'] == countdown_norm]['gamma'].iloc[0]
 
             
@@ -302,10 +336,15 @@ class Student(Human):
     def __init__(self, unique_id, model, shape, room, health_status = 'healthy', mask_on=False):
         super().__init__(unique_id, model, shape, room, health_status)
 
+        viz_ini_file = 'vizparams.ini'
+        parser = configparser.ConfigParser()
+        parser.read(config_file_path_prefix + viz_ini_file)
+        student_viz_params = parser['STUDENT']
+
         self.grade = self.room.room_type.replace('classroom_', '')
         self.mask = mask_on        
         self.seat = Point(self.shape.x, self.shape.y)
-        self.marker = 'o'
+        self.marker = student_viz_params['marker']
         
         
         
@@ -415,10 +454,15 @@ class Teacher(Human):
         super().__init__(unique_id, model, shape, room, health_status)
         self.mask = mask_on
         self.classroom = self.room # TODO: for future development enabling Teachers to move to other room during non-class time
+
+        viz_ini_file = 'vizparams.ini'
+        parser = configparser.ConfigParser()
+        parser.read(config_file_path_prefix + viz_ini_file)
+        teacher_viz_params = parser['TEACHER']
         
-        self.marker = "^"
-        self.edgedict = {"healthy": '#009416', 'exposed': '#cf9e19', 'infectious': '#a82e05'}
-        self.sizedict = {"healthy": 7, 'exposed': 8, 'infectious': 10}
+        self.marker = teacher_viz_params['marker']
+        self.edgedict = {"healthy": teacher_viz_params['healthy_edge'], 'exposed': teacher_viz_params['exposed_edge'], 'infectious': teacher_viz_params['infectious_edge']}
+        self.sizedict = {"healthy": teacher_viz_params['healthy_size'], 'exposed': teacher_viz_params['exposed_size'], 'infectious': teacher_viz_params['infectious_size']}
     
     
     def step(self):
