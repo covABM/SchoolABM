@@ -13,12 +13,17 @@ import pandas as pd
 import numpy as np
 import random
 import csv
+import sys
+import os
 
 
 #Plot
 import matplotlib.pyplot as plt
 import gc
 
+
+#config
+import configparser
 
 
 student_marker = 'o'
@@ -33,6 +38,19 @@ teacher_edgedict = {"healthy": '#009416', 'exposed': '#cf9e19', 'infectious': '#
 teacher_sizedict = {"healthy": 14, 'exposed': 16, 'infectious': 20}
 
 plt.rcParams["figure.figsize"] = (15,15)
+
+
+
+# Prefix for config data
+#os.chdir(os.path.dirname(sys.path[0]))
+
+
+school_params = './config/schoolparams.ini'
+parser = configparser.ConfigParser()
+parser.read(school_params)
+population = parser['SCHOOL_POPULATION']
+total_population = int(population['total_population'])
+
 
 def load_map(file_path):
     '''
@@ -65,8 +83,39 @@ def load_map(file_path):
 
 
 
+def analyze_model_result(model_out_df=None, model_out_path = None, write_image = False, username='jleiucsd'):
+    """
+    generate statistic analysis of the model ouput on number of days vs number of covid positive patients
+    if write_image True: saves the analysis plot to local directory of model output (oasis specified foloder)
+    inputs:
+        model_out_df: model output as a dataframe format
+        model_out_path: model output as a file path to a csv file
+            model_out_df, and model_out_path cannot be None at the same time!
+        write_image: if True, the result will be saved on the local directory of model output
+        username: username of oasis account
+    """
+    if (model_out_df is None) and (model_out_path is None):
+        raise ValueError('All parameter inputs cannot be None!')
+    
+    
+    
+    output_path = "/oasis/scratch/comet/{}/temp_project/".format(username) +\
+    "output"
 
+    
+    if (model_out_df is None):
+        model_out_df = pd.read_csv(model_out_path)
 
+        
+    plt.grid(linestyle="-.")
+    plt.plot(list(model_out_df.drop_duplicates().cov_positive/total_population), linewidth=5)
+    plt.xlabel('Days', fontsize=20)
+    plt.ylabel('COVID Positive Patients (%)', fontsize=20)
+    
+    if write_image:
+        plt.savefig(fileout + 'output_stats.png')
+    
+    plt.show()
 
 
 

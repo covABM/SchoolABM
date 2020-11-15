@@ -5,6 +5,7 @@ from mesa import Model
 from scipy import stats 
 import math
 import os
+import sys
 import warnings
 
 
@@ -28,6 +29,7 @@ import matplotlib.pyplot as plt
 
 
 # Prefix for config data
+#os.chdir(os.path.dirname(sys.path[0]))
 config_file_path_prefix = './config/'
 
 
