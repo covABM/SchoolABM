@@ -94,32 +94,7 @@ def find_room_type(room_agents, room_type):
 
 
 
-def load_map(file_path):
-    '''
-    This is specific to the current school layout at this point, should be modified later in the future
-    assume the input school map file is sufficient
-    '''
-    school_geometry = gpd.read_file(file_path)
 
-    # move second floor to map bottom
-    p = Polygon([(900,-800), (900,-1100), (1650,-1100), ( 1650,-800)])
-    sf = school_geometry.geometry.intersects(p)
-    new_sf = school_geometry[sf].translate(yoff=-800)
-    school_geometry.loc[sf,["geometry"]] = new_sf
-    school_gdf = school_geometry.rename(columns={"object": "room_type"})
-
-
-    # generate recess area
-    grd_recess = Polygon([(750, -1000), (750, -710), (1615, -710), (1615, -1480), (1450, -1480), (1450, -1200), 
-                                                               (900, -1200), (900, -1000)])
-    pkg_recess = Polygon([(430, -1400), (430, -1150), (660, -1150), (660, -1400)])
-
-
-
-    school_gdf = school_gdf[['Id', 'room_type', 'geometry']]
-    school_gdf.loc[len(school_gdf)] = [90000, 'recess_yard', grd_recess]
-    school_gdf.loc[len(school_gdf)] = [90001, 'recess_yard', pkg_recess]
-    return school_gdf
 
 
 
@@ -590,7 +565,7 @@ class School(Model):
 
     
     def __init__(self, map_path, schedule_path, grade_N, KG_N, preschool_N, special_education_N, 
-                 faculty_N, seat_dist, init_patient=3, attend_rate=1, mask_prob=0.516, inclass_lunch=False, username="jleiucsd"):
+                 faculty_N, seat_dist, init_patient=3, attend_rate=1, mask_prob=0.516, inclass_lunch=False):
         # zipcode etc, for access of more realistic population from KG perhaps
         
         
@@ -600,7 +575,7 @@ class School(Model):
         self.inclass_lunch = inclass_lunch
         self.seat_dist = math.ceil(seat_dist/(attend_rate**(1/2)))
         self.idle_teachers = [] # teachers to be assigned without a classroom
-        self.init_patient = init_patient
+        self.init_patient = init_patientu
 
         
         
@@ -629,7 +604,7 @@ class School(Model):
         
         
         
-        school_gdf = load_map(map_path)
+        school_gdf = gpd.read_file(map_path)
 
 
 
@@ -665,7 +640,7 @@ class School(Model):
         self.__teacher_id = 0
         self.__student_id = 0
         self.__faculty_N = faculty_N
-        self.schedule_ids = self.schoolday_schedule.columns
+        self.schedule_ids = self.schoolday_schedule.columnsu
         
         
         

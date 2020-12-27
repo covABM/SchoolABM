@@ -52,7 +52,7 @@ population = parser['SCHOOL_POPULATION']
 total_population = int(population['total_population'])
 
 
-def load_map(file_path):
+def load_map_school1(file_path):
     '''
     This is specific to the current school layout at this point, should be modified later in the future
     assume the input school map file is sufficient
@@ -74,16 +74,18 @@ def load_map(file_path):
 
 
 
-    school_gdf = school_gdf[['Id', 'geometry']]
-    school_gdf.loc[len(school_gdf)] = [90000, grd_recess]
-    school_gdf.loc[len(school_gdf)] = [90001, pkg_recess]
+    school_gdf = school_gdf[['Id', 'room_type', 'geometry']]
+    school_gdf.loc[len(school_gdf)] = [90000, 'recess_yard', grd_recess]
+    school_gdf.loc[len(school_gdf)] = [90001, 'recess_yard', pkg_recess]
     return school_gdf
 
 
 
 
 
-def analyze_model_result(model_out_df=None, model_out_path = None, write_image = False, username='jleiucsd'):
+
+
+def analyze_model_result(model_df=None, model_df_path = None, write_image = False, username='jleiucsd'):
     """
     generate statistic analysis of the model ouput on number of days vs number of covid positive patients
     if write_image True: saves the analysis plot to local directory of model output (oasis specified foloder)
@@ -94,7 +96,7 @@ def analyze_model_result(model_out_df=None, model_out_path = None, write_image =
         write_image: if True, the result will be saved on the local directory of model output
         username: username of oasis account
     """
-    if (model_out_df is None) and (model_out_path is None):
+    if (model_df is None) and (model_df_path is None):
         raise ValueError('All parameter inputs cannot be None!')
     
     
@@ -103,12 +105,12 @@ def analyze_model_result(model_out_df=None, model_out_path = None, write_image =
     "output"
 
     
-    if (model_out_df is None):
-        model_out_df = pd.read_csv(model_out_path)
+    if (model_df is None):
+        model_df = pd.read_csv(model_df_path)
 
         
     plt.grid(linestyle="-.")
-    plt.plot(list(model_out_df.drop_duplicates().cov_positive/total_population), linewidth=5)
+    plt.plot(list(model_df.drop_duplicates().cov_positive/total_population), linewidth=5)
     plt.xlabel('Days', fontsize=20)
     plt.ylabel('COVID Positive Patients (%)', fontsize=20)
     
