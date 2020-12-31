@@ -170,7 +170,7 @@ def write_output(params_key, output_dfs, map_path, username='jleiucsd'):
     
     model_df, agent_df = output_dfs
     
-    school_gdf = load_map(map_path)
+    school_gdf = gpd.read_file(map_path)
     school_gdf = school_gdf.rename({'Id': 'AgentID'}, axis=1)
     agent_gdf = gpd.GeoDataFrame(agent_df, geometry=gpd.points_from_xy(agent_df.x, agent_df.y))
     
@@ -185,6 +185,7 @@ def write_output(params_key, output_dfs, map_path, username='jleiucsd'):
     
 def show(i, step_gdf, school_gdf, output_path):
     humans_gdf = step_gdf[step_gdf["viral_load"].isna()]
+    humans_gdf = humans_gdf[humans_gdf["x"].notna()]
     viral_load = step_gdf[step_gdf["viral_load"].notna()]["viral_load"].droplevel("Step")
     
     # school map case

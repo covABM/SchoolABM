@@ -1,5 +1,5 @@
 from mesa_geo import GeoAgent, AgentCreator, GeoSpace
-from mesa.time import BaseScheduler
+from mesa.time import BaseScheduler, RandomActivation, SimultaneousActivation
 from mesa import datacollection
 from mesa import Model
 from scipy import stats 
@@ -52,11 +52,18 @@ incubation = parser_dis['INCUBATION']
 
 # NPI config data
 
-
 npi_params_ini = 'NPI.ini'
 parser_npi = configparser.ConfigParser()
 parser_npi.read(config_file_path_prefix + npi_params_ini)
 
+
+# school config data
+
+
+school_params_ini = 'schoolparams.ini'
+parser_school = configparser.ConfigParser()
+parser_school.read(config_file_path_prefix + school_params_ini)
+cohort_config = parser_school['COHORT']
 
 
 
@@ -197,33 +204,8 @@ class Human(GeoAgent):
             neighbors = self.model.grid.get_neighbors_within_distance(self, int(parser_npi['NO_NPI']['infection_distance']))
 
         
-        # UPDATE 10/16: infectious has made obsolete due to infectious curve covering after symptom onset fit
-        # credit Bailey Man
-        '''
-        if self.health_status == 'infectious':
-            #TODO: sliding Distance calculation for neighbor infection
-            # a scale for health status
 
-
-            # Loop through infected agent's neighbors that are within 3
-        
-            for neighbor in neighbors:
-                
-                ### 
-                #temp value, replace this with distance -> viral load -> infection_prob calculation eventually
-                temp_prob = .857 # previous value used
-
-                # Check class is Human                            
-                if issubclass(type(neighbor), Human):
-
-                    infective_prob = np.random.choice ([True, False], p = [temp_prob, 1 - temp_prob])
-                    if infective_prob and self.__check_same_room(neighbor):
-                        neighbor.health_status = 'exposed'
-        '''    
-
-                        
-                        
-                        
+                                               
         if self.health_status == 'exposed' and self.infective:
 
             # normalize symptom countdown value to infectious distribution value
@@ -255,7 +237,8 @@ class Human(GeoAgent):
                         if infective_prob and self.__check_same_room(neighbor):
                             neighbor.health_status = 'exposed'
 
-                        
+         
+        
     def __check_same_room(self, other_agent):
         '''
         check if current agent and other agent is in the same room
@@ -324,6 +307,7 @@ class Student(Human):
         parser.read(config_file_path_prefix + viz_ini_file)
         student_viz_params = parser['STUDENT']
 
+        self.cohort = None
         self.grade = self.room.room_type.replace('classroom_', '')
         self.mask = mask_on        
         self.seat = Point(self.shape.x, self.shape.y)
@@ -331,7 +315,9 @@ class Student(Human):
         
         
         
-
+        
+        
+        
         self.out_of_place = False        
         self.prev_activity = None
         self.lunch_count = 0
@@ -347,7 +333,15 @@ class Student(Human):
                 
                 
     def step(self):
-        self._Human__update() 
+        self._Human__update()
+        
+        
+        if self.model.schedule_type != "Simultaneous":
+            self.advance()
+        
+    
+    
+    def advance(self):
         
         activity = self.model.activity[self.room.schedule_id]
         # case 1: student in class
@@ -366,19 +360,17 @@ class Student(Human):
                     
                 
                 
+        # UPDATE Christmas now students move within cohort range
         # case 2: student in recess            
         elif activity == 'recess':
             ### TODO: recess yard assignment is hard coded ###
 
-            location = self.model.recess_yards[0]
-            if self.grade != 'grade':
-                location = self.model.recess_yards[1]
                 
             if self.prev_activity != activity:
-                self.update_shape(generate_random(location.shape))
+                self.update_shape(generate_random(self.cohort.shape))
                 self.prev_activity = activity
             
-            self._Human__move(move_spread=15, location = location)
+            self._Human__move(move_spread=15, location = self.cohort)
         
         
         
@@ -450,11 +442,68 @@ class Teacher(Human):
     
     def step(self):
         self._Human__update()
+        
+        if self.model.schedule_type != "Simultaneous":
+            self.advance()
+        
+        
+    def advance(self):
         self._Human__move()
                 
         
-
-
+# UPDATE Christmas add cohort agent
+class Cohort(GeoAgent):
+    # dummy config for data collection
+    health_status = None
+    symptoms = None
+    x = None
+    y = None
+    viral_load = None
+    
+    # get cohort area config
+    max_intersection_prob = eval(cohort_config['max_intersection_prob'])
+    
+    def __init__(self, unique_id, model, shape, students, recess_yard, radius):
+        super().__init__(unique_id, model, shape)
+        self.radius = radius
+        self.students = students
+        self.recess_yard = recess_yard
+        for student in self.students:
+            student.cohort = self
+        
+    def step(self):
+        # currently does nothing
+        if self.model.schedule_type != "Simultaneous":
+            self.advance()
+    
+    def advance(self):
+        # generate a random cohort recess location at the beginning of day
+        if self.model.step_count == 0:
+            while True:
+                self.shape = self.__update_cohort_location()
+                if self.__check_intersection():
+                    break
+                
+            
+    def __update_cohort_location(self):
+        while True:
+            center = generate_random(self.recess_yard.shape)
+            shape = center.buffer(self.radius)
+            if self.recess_yard.shape.contains(shape):
+                    return shape
+    
+    
+    def __check_intersection(self):
+        other_cohorts = [a for a in list(self.model.grid.get_intersecting_agents(self)) if issubclass(type(a), Cohort)]
+        for a in other_cohorts:
+            if a.unique_id != self.unique_id:
+                if self.shape.intersection(a.shape).area > self.max_intersection_prob * self.shape.area:
+                    return False
+        return True
+            
+            
+            
+    
 
 
 
@@ -490,6 +539,13 @@ class Classroom(GeoAgent):
         # should change to volume of room later
         self.viral_load += len([a for a in occupants if a.health_status != "healthy"])/self.shape.area
         
+        
+        if self.model.schedule_type != "Simultaneous":
+            self.advance()
+        
+        
+        
+    def advance(self):
         # Don't run anything at this point
         # intended for aerosal transmission
         '''
@@ -564,8 +620,20 @@ class Classroom(GeoAgent):
 class School(Model):
 
     
+    
+    schedule_types = {"Sequential": BaseScheduler,
+                      "Random": RandomActivation,
+                      "Simultaneous": SimultaneousActivation}
+    
+    
+    
+    
+
+
+    
     def __init__(self, map_path, schedule_path, grade_N, KG_N, preschool_N, special_education_N, 
-                 faculty_N, seat_dist, init_patient=3, attend_rate=1, mask_prob=0.516, inclass_lunch=False):
+                 faculty_N, seat_dist, init_patient=3, attend_rate=1, mask_prob=0.516, 
+                 inclass_lunch=False, schedule_type="Simultaneous"):
         # zipcode etc, for access of more realistic population from KG perhaps
         
         
@@ -575,7 +643,7 @@ class School(Model):
         self.inclass_lunch = inclass_lunch
         self.seat_dist = math.ceil(seat_dist/(attend_rate**(1/2)))
         self.idle_teachers = [] # teachers to be assigned without a classroom
-        self.init_patient = init_patientu
+        self.init_patient = init_patient
 
         
         
@@ -584,7 +652,8 @@ class School(Model):
         # mesa model init
         self.running = True
         self.grid = GeoSpace()
-        self.schedule = BaseScheduler(self)
+        self.schedule_type = schedule_type
+        self.schedule = self.schedule_types[self.schedule_type](self)
         
         
         
@@ -639,13 +708,120 @@ class School(Model):
         # id tracking init
         self.__teacher_id = 0
         self.__student_id = 0
+        self.__cohort_id = 0
         self.__faculty_N = faculty_N
-        self.schedule_ids = self.schoolday_schedule.columnsu
+        self.schedule_ids = self.schoolday_schedule.columns
         
         
         
+        # geo-object tracking init
         self.recess_yards = find_room_type(self.room_agents, 'recess_yard')
+        self.cohorts = []
         
+        
+        # UPDATE Christmas cohort generation
+        def generate_cohorts(students, N):
+            '''
+            generate cohorts with within/out-of classroom probability, cohort size probablity
+            example: students have 80% chance to have a friend in same room, 20% chance to have a friend in different room
+            and 50% to have a cohort size of 5, 20% size 2, 15% size 4, 10% size 3, 5% size 1
+            
+            students: a 2d list containing list of students in each room
+                students[k] is a list of student agents (in same classroom room)
+                
+            '''
+
+            size_prob = eval(cohort_config['size_prob'])
+            same_room_prob = eval(cohort_config['same_room_prob'])
+            
+            
+            
+            radius = eval(cohort_config['radius'])
+            
+            
+            
+            size_val_list = list(size_prob.keys())
+            size_prob_list = list(size_prob.values())
+            same_room_val_list = list(same_room_prob.keys())
+            same_room_prob_list = list(same_room_prob.values())
+            
+            
+            # start at room 0
+            cur_room = 0
+
+            while N > 0:
+
+                cur_size = np.random.choice(size_val_list, p = size_prob_list)
+                if N <= max(size_val_list):
+                    cur_size = N
+
+                # get same-room cohort size 
+                cur_same = sum(np.random.choice(same_room_val_list, size = cur_size, p = same_room_prob_list))
+
+                # add students from current room to current cohort
+                cur_same = min(cur_same, len(students[cur_room]))          
+                cohort = students[cur_room][:cur_same]
+                students[cur_room] = students[cur_room][cur_same:]
+
+
+                room_idx = list(range(len(students)))
+
+                other_room = room_idx[:]
+                other_room.remove(cur_room)
+
+                # add students from other rooms to cohort
+                if not len(other_room):
+                    rand_room = [cur_room]*(cur_size - cur_same)
+                else:
+                    rand_room = np.random.choice(other_room ,size = (cur_size - cur_same))
+                    
+                for r in rand_room:
+                    # update and remove r if r is an empty room
+                    while True:
+                        try:
+                            cohort.append(students[r][0])
+                            students[r] =students[r][1:]
+                            break
+                        except:
+                            if r in other_room:
+                                other_room.remove(r)
+                            if not len(other_room):
+                                r = cur_room
+                            else:
+                                r = np.random.choice(other_room)
+
+
+                            
+                            
+                            
+                # TODO: recess yard is current hard coded             
+                recess_yard = self.recess_yards[0]
+                if cohort[0].grade != 'grade':
+                    recess_yard = self.recess_yards[1]
+                    
+                    
+                # make cohort agent with dummy shape
+                cur_cohort = Cohort("Cohort" + str(self.__cohort_id), self, Point(0,0), cohort, recess_yard, cur_size*radius)
+                self.grid.add_agents(cur_cohort)
+                self.schedule.add(cur_cohort)
+                self.cohorts.append(cur_cohort)
+                self.__cohort_id += 1
+                
+                
+                # remove empty rooms
+                students = [room for room in students if len(room) > 0]
+
+                # rolling update to minimize student pop edge cases 
+                # fail safe break
+                if not len(students):
+                    break
+                cur_room = (cur_room + 1)%len(students)
+
+                # update student population
+                N -= cur_size
+            
+            
+            
         
         def init_agents(room_type, N, partition=False):
             '''
@@ -672,13 +848,23 @@ class School(Model):
                 
             class_size = N//len(rooms)
             remaining_size = N%len(rooms)
-
+            
+            #track all students of same grade type
+            all_students = []
             for i, classroom in zip(range(len(rooms)), rooms):
                 
                 classroom.generate_seats(class_size, self.seat_dist)
                 classroom.schedule_id = self.schedule_ids[i//partition_size]
                 
-                for idx in range(class_size):                    
+                # spread remaining student into all classrooms
+                c_size = class_size
+                if remaining_size > 0:
+                    remaining_size -= 1
+                    c_size += 1
+                
+                #track students within the same room
+                students = []
+                for idx in range(c_size):                    
                     pnt = classroom.seats[idx]
                     mask_on = np.random.choice([True, False], p=[mask_prob, 1-mask_prob])
                     agent_point = Student(model=self, shape=pnt, unique_id="S"+str(self.__student_id), room=classroom, mask_on=mask_on)
@@ -686,19 +872,12 @@ class School(Model):
                     self.grid.add_agents(agent_point)
                     self.schedule.add(agent_point)
                     self.__student_id += 1
-
-                # spread remaining student into all classrooms
-                if remaining_size > 0:
-                    pnt = classroom.seats[class_size]
-                    mask_on = np.random.choice([True, False], p=[mask_prob, 1-mask_prob])
-                    agent_point = Student(model=self, shape=pnt, unique_id="S"+str(self.__student_id), room=classroom, mask_on=mask_on)
                     
-                    self.grid.add_agents(agent_point)
-                    self.schedule.add(agent_point)
-                    self.__student_id += 1
-                    remaining_size -= 1
+                    # add student to room temp list
+                    students.append(agent_point)
 
-
+                    
+                
                 #add teacher to class
                 pnt = generate_random(classroom.shape)
                 agent_point = Teacher(model=self, shape=pnt, unique_id="T"+str(self.__teacher_id), room=classroom)
@@ -707,6 +886,20 @@ class School(Model):
                 self.idle_teachers.append(agent_point)
                 self.__teacher_id += 1
                 self.__faculty_N -= 1
+                
+                # add room students list to all students 
+                # shuffle students for efficiency improvement
+                np.random.shuffle(students)
+                all_students.append(students)
+            
+            
+            
+            
+            #UPDATE Christmas
+            #generate cohort with temp student list
+            generate_cohorts(all_students, N)
+            
+            
 
 
         
