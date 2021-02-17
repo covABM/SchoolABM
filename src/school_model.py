@@ -162,11 +162,34 @@ class Human(GeoAgent):
         self.asymptomatic = np.random.choice([True, False], p = [prevalence, 1-prevalence])
         self.symptoms = False
 
-        # UPDATE 10/17: delay infection by 1 day to avoid infection explosion
+        
         self.infective = False
 
         # symptom onset countdown config
-        ##########################################
+        
+        
+        shape, loc, scale =  (0.6432659248014824, -0.07787673726582335, 4.2489459496009125)
+        x = np.linspace(0, 17, 1000)
+#         countdown_curve = stats.lognorm(s=shape, loc=loc, scale=scale)
+        
+        # initialize base transmission rate for infected students
+        if self.health_status != 'healthy':
+            temp = int(np.round(stats.lognorm.rvs(shape, loc, scale, size=1)[0], 0))
+            if temp > 17:
+                temp = 17
+            if temp < -10:
+                temp = 10
+            
+            self.infected = int(np.round(stats.lognorm.rvs(shape, loc, scale, size=1)[0], 0))
+        # create infectiveness reference dataframe
+        shape, loc, scale = (20.16693271833812, -12.132674385322815, 0.6322296057082886)
+        x = np.linspace(-10, 8, 19)
+        infective_df = pd.DataFrame({'x': list(x), 'gamma': list(stats.gamma.pdf(x, a=shape, loc=loc, scale=scale))})
+
+
+        # temp Mask Passage: 1 = no masks, .1 = cloth, .05 = N95
+        self.mask_passage_prob = .1
+        
         # From 10000 lognorm values in R
         countdown = parser_dis['COUNTDOWN']
         shape, loc, scale =  (float(countdown['shape']), float(countdown['loc']), float(countdown['scale']))
@@ -175,11 +198,8 @@ class Human(GeoAgent):
 
         num_days = min(np.round(lognormal_dist, 0)[0], int(countdown['upper_bound'])) # failsafe to avoid index overflow
         self.symptom_countdown = int(num_days)
-        #######################################
-
-
-
-
+        
+        # room setup
         self.room = room
         self.x = self.shape.x
         self.y = self.shape.y
@@ -196,8 +216,7 @@ class Human(GeoAgent):
 
 
     def __update(self):
-        # UPDATE 10/16: reorganized things from Bailey's update
-        # TODO: currently mask has no functionality other than reducing transmission distance, is this faithful?
+        # UPDATE 2/17: Chu Code implemented
 
 
         # mask wearing reduces droplet transmission max range
@@ -206,10 +225,6 @@ class Human(GeoAgent):
             neighbors = self.model.grid.get_neighbors_within_distance(self, int(parser_npi['MASKS']['infection_distance']))
         else:
             neighbors = self.model.grid.get_neighbors_within_distance(self, int(parser_npi['NO_NPI']['infection_distance']))
-
-
-        # UPDATE 10/16: infectious has made obsolete due to infectious curve covering after symptom onset fit
-        # credit Bailey Man
         '''
         if self.health_status == 'infectious':
             #TODO: sliding Distance calculation for neighbor infection
@@ -246,25 +261,56 @@ class Human(GeoAgent):
             temp_prob = self.infective_df[self.infective_df['x'] == countdown_norm]['gamma'].iloc[0]
 
 
-            for neighbor in neighbors:
+            for neighbor in neighbors: # could we do my inf/uninf dicts?
 
                 # Check class is Human
                 if issubclass(type(neighbor), Human):
-                    if neighbor.unique_id != self.unique_id:
-                        # TODO: update this to a more realistic scale
+                    
+                    if neighbor.unique_id != self.unique_id: # and is not infected infecting another infected
+                        # Calculate Transmission                
                         agent_distance = self.shape.distance(neighbor.shape)
-
-                        try:
-                            dist_bias = np.sqrt(min(1, 1/agent_distance))
-                        except:
-                            dist_bias = 1
-
-
+                        time_ = self.infected
+                        transmission_b = infective_df[infective_df.x == -1 * time]['gamma']
+                        
+                        # Use Chu distance calculation ## see docs
+                        chu_distance_multiplier = 1/2.02
+                        distance_ = agent_distance * chu_distance_multiplier
+                        
+                        # temp Mask Passage: 1 = no masks, .1 = cloth, .05 = N95
+                        mask_passage_prob = .1
+                        
+                        # convert transmission rate / hour into transmission rate / step
+                        hour_to_fivemin_step = 5/60
+                        
+                        temp_prob = transmission_b * distance_ * mask_passage_prob * hour_to_fivemin_step
                         # row a dice of temp_prob*dist_bias chance to expose other agent
-                        infective_prob = np.random.choice ([True, False], p = [temp_prob*dist_bias, 1 - (temp_prob*dist_bias)])
-
+                        infective_prob = np.random.choice ([True, False], p = [temp_prob, 1-temp_prob])
                         if infective_prob and self.__check_same_room(neighbor):
                             neighbor.health_status = 'exposed'
+                            
+                            
+                   
+    def droplet_infect(infect_id, uninfect_id, infected, distance):
+        distance = get_distance(infect_id, uninfect_id, student_pos)
+        time = infected[infect_id]
+        transmission_baseline = infective_df[infective_df.x == -1 * time]['gamma']
+
+
+
+
+        # approximate student time spent breathing vs talking vs loudly talking
+        breathing_type_multiplier = np.random.choice([.1, .5, 1], p=[.2, .05, .75])
+        # whisper, loud, heavy
+
+        mask_multiplier = mask_passage_prob # equivalent to aerosol masks
+
+        # convert transmission rate / hour into transmission rate / step
+        hour_to_fivemin_step = 5/60
+        # test if necessary
+
+        return transmission_baseline * distance_multiplier * breathing_type_multiplier * mask_multiplier * hour_to_fivemin_step
+
+
 
 
     def __check_same_room(self, other_agent):
