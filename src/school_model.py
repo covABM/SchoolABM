@@ -216,7 +216,7 @@ class Human(GeoAgent):
 
 
     def __update(self):
-        # UPDATE 2/17: Chu Code implemented
+        # UPDATE 2/17: Chu paper distance transmission implemented
 
 
         # mask wearing reduces droplet transmission max range
