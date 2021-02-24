@@ -1,8 +1,9 @@
-from mesa_geo import GeoAgent, AgentCreator, GeoSpace
+from mesa_geo import GeoAgent, GeoSpace
 from mesa.time import BaseScheduler, RandomActivation, SimultaneousActivation
 from mesa import datacollection
 from mesa import Model
 from scipy import stats 
+from inspect import signature
 import math
 import os
 import sys
@@ -27,6 +28,9 @@ import configparser
 #Plot
 import matplotlib.pyplot as plt
 
+# Aerosol Transmission
+import aerosol_new
+import transmission_rate as trans_rate
 
 # Prefix for config data
 #os.chdir(os.path.dirname(sys.path[0]))
@@ -52,6 +56,7 @@ incubation = parser_dis['INCUBATION']
 
 # NPI config data
 
+
 npi_params_ini = 'NPI.ini'
 parser_npi = configparser.ConfigParser()
 parser_npi.read(config_file_path_prefix + npi_params_ini)
@@ -63,9 +68,8 @@ parser_npi.read(config_file_path_prefix + npi_params_ini)
 school_params_ini = 'schoolparams.ini'
 parser_school = configparser.ConfigParser()
 parser_school.read(config_file_path_prefix + school_params_ini)
+population_config = parser_school['SCHOOL_POPULATION']
 cohort_config = parser_school['COHORT']
-
-
 
 
 
@@ -115,7 +119,7 @@ class Human(GeoAgent):
     edgedict = {"healthy": default_section['healthy_edge'], 'exposed': default_section['exposed_edge'], 'infectious': default_section['infectious_edge']}
     sizedict = {"healthy": default_section['healthy_size'], 'exposed': default_section['exposed_size'], 'infectious': default_section['infectious_size']}
     
-
+    
     
     
     # dummy config for data collection
@@ -157,8 +161,12 @@ class Human(GeoAgent):
         prevalence = float(parser_dis['ASYMPTOMATIC_PREVALENCE']['prevalence'])
         self.asymptomatic = np.random.choice([True, False], p = [prevalence, 1-prevalence])
         self.symptoms = False
+
+
+        # TODO: vaccination should be parameterized (effective rate, etc.)
+        self.tested = False
+        self.vaccinated = False
         
-        # UPDATE 10/17: delay infection by 1 day to avoid infection explosion
         self.infective = False
         
         # symptom onset countdown config
@@ -195,9 +203,11 @@ class Human(GeoAgent):
         # UPDATE 10/16: reorganized things from Bailey's update
         # TODO: currently mask has no functionality other than reducing transmission distance, is this faithful?
 
-
         # mask wearing reduces droplet transmission max range
         # infection above max range is considered as aerosal transmission
+        
+        
+        # TODO: Bailey 
         if self.mask and not (self.model.activity[self.room.schedule_id] == 'lunch'):
             neighbors = self.model.grid.get_neighbors_within_distance(self, int(parser_npi['MASKS']['infection_distance']))
         else:
@@ -205,7 +215,9 @@ class Human(GeoAgent):
 
         
 
-                                               
+                        
+                        
+                        
         if self.health_status == 'exposed' and self.infective:
 
             # normalize symptom countdown value to infectious distribution value
@@ -234,11 +246,10 @@ class Human(GeoAgent):
                         # row a dice of temp_prob*dist_bias chance to expose other agent
                         infective_prob = np.random.choice ([True, False], p = [temp_prob*dist_bias, 1 - (temp_prob*dist_bias)])
 
-                        if infective_prob and self.__check_same_room(neighbor):
+                        if infective_prob and self.__check_same_room(neighbor) and not self.vaccinated:
                             neighbor.health_status = 'exposed'
 
-         
-        
+                        
     def __check_same_room(self, other_agent):
         '''
         check if current agent and other agent is in the same room
@@ -259,7 +270,7 @@ class Human(GeoAgent):
         return same_room
     
     
-    def __move(self, move_spread = 12, location = None):
+    def __move(self, move_spread = 4, location = None):
         '''
         Checks the current location and the surrounding environment to generate a feasbile range of destination (the area
         of a circle) for agent to move to.
@@ -270,13 +281,22 @@ class Human(GeoAgent):
         if not location:
             location = self.room
         move_spread = location.shape.intersection(self.shape.buffer(move_spread))
-        minx, miny, maxx, maxy = move_spread.bounds
-        while True:
-            pnt = Point(random.uniform(minx, maxx), random.uniform(miny, maxy))            
-            # check if point lies in true area of polygon
-            if move_spread.contains(pnt):
-                self.update_shape(pnt)
-                break
+        if hasattr(location, 'seating_pattern'):
+            if location.seating_pattern == 'circular':
+                move_spread = shapely.ops.cascaded_union(list(location.desks.values())).difference(move_spread)
+        try:
+            minx, miny, maxx, maxy = move_spread.bounds 
+                
+            while True:
+                pnt = Point(random.uniform(minx, maxx), random.uniform(miny, maxy))            
+                # check if point lies in true area of polygon
+                if move_spread.contains(pnt):
+                    self.update_shape(pnt)
+                    break
+        except:
+            pass
+
+
     
     
     def plot(self):
@@ -307,20 +327,21 @@ class Student(Human):
         parser.read(config_file_path_prefix + viz_ini_file)
         student_viz_params = parser['STUDENT']
 
-        self.cohort = None
         self.grade = self.room.room_type.replace('classroom_', '')
-        self.mask = mask_on        
+        self.mask = mask_on       
+        self.mask_type = None 
         self.seat = Point(self.shape.x, self.shape.y)
         self.marker = student_viz_params['marker']
         
         
         
-        
-        
-        
+
         self.out_of_place = False        
         self.prev_activity = None
         self.lunch_count = 0
+        self.desks = None
+        self.breathing_rate = None
+        self.breathing_activity = None
         
         
         
@@ -328,29 +349,30 @@ class Student(Human):
         
                 
 
-                
-
-                
-                
     def step(self):
         self._Human__update()
         
         
         if self.model.schedule_type != "Simultaneous":
-            self.advance()
-        
-    
-    
+            self.advance()                
+
+                
+                
     def advance(self):
-        
         activity = self.model.activity[self.room.schedule_id]
         # case 1: student in class
         if activity == 'class': 
             if self.prev_activity != activity:
                 self.prev_activity = activity
                 self.update_shape(self.seat)
+                self.breathing_rate = 'resting'
+                
+                #TODO: The probability should be in init file
+                self.breathing_activity = np.random.choice(['talking_whisper', 'talking_loud', 'breathing_heavy'], p=[0.2, 0.05, 0.75])
+
                 
             if self.room.prob_move:
+                # TODO: this should change breathing activity prob slightly
                 self.out_of_place = True
                 self._Human__move()
             else:
@@ -360,22 +382,24 @@ class Student(Human):
                     
                 
                 
-        # UPDATE Christmas now students move within cohort range
         # case 2: student in recess            
         elif activity == 'recess':
-            ### TODO: recess yard assignment is hard coded ###
-
-                
+            
+            self.breathing_rate = 'NA'
+            
+            
             if self.prev_activity != activity:
                 self.update_shape(generate_random(self.cohort.shape))
                 self.prev_activity = activity
             
-            self._Human__move(move_spread=15, location = self.cohort)
+            self._Human__move(move_spread=5, location = self.cohort)
         
         
         
         # case 3: student having lunch
         elif activity == 'lunch':
+            self.breathing_rate = 'resting'
+            self.breathing_activity = 'breathing_heavy'
             #in class lunch case
             if self.model.inclass_lunch or self.grade != 'grade':
                 if self.prev_activity != activity:
@@ -397,7 +421,7 @@ class Student(Human):
 
                 # enter lunch cafeteria, move free for 2 iteration
                 if self.lunch_count < 2:
-                    self._Human__move(move_spread=40, location = self.model.lunchroom)
+                    self._Human__move(move_spread=10, location = self.model.lunchroom)
 
                 # finds seat, settle in seat until finish lunch
                 elif self.lunch_count == 2:
@@ -428,7 +452,14 @@ class Teacher(Human):
     def __init__(self, unique_id, model, shape, room, health_status = 'healthy',mask_on=True):
         super().__init__(unique_id, model, shape, room, health_status)
         self.mask = mask_on
+        self.mask_type = None
         self.classroom = self.room # TODO: for future development enabling Teachers to move to other room during non-class time
+        self.breathing_rate = None
+        self.breathing_activity = None
+        
+        
+        #TODO: vaccination should be parameterized
+        self.vaccinated = True
 
         viz_ini_file = 'vizparams.ini'
         parser = configparser.ConfigParser()
@@ -441,16 +472,21 @@ class Teacher(Human):
     
     
     def step(self):
+        self.breathing_rate = 'light_exercise'
+        self.breathing_activity = np.random.choice(['talking_loud', 'talking_normal', 'breathing_heavy'], p=[0.5, 0.25, 0.25])
         self._Human__update()
         
+                
         if self.model.schedule_type != "Simultaneous":
             self.advance()
-        
-        
+            
     def advance(self):
         self._Human__move()
                 
         
+
+
+
 # UPDATE Christmas add cohort agent
 class Cohort(GeoAgent):
     # dummy config for data collection
@@ -482,15 +518,23 @@ class Cohort(GeoAgent):
             while True:
                 self.shape = self.__update_cohort_location()
                 if self.__check_intersection():
+
                     break
                 
             
     def __update_cohort_location(self):
-        while True:
+        
+        #UPDATE: add max toleration for intersection check
+        # avoid crowded recess yard which 
+        #makes random generation of cohort location with given intersection prob impossible
+        max_toleration = 10
+        for i in range(max_toleration):
             center = generate_random(self.recess_yard.shape)
             shape = center.buffer(self.radius)
             if self.recess_yard.shape.contains(shape):
-                    return shape
+
+                return shape
+        return shape
     
     
     def __check_intersection(self):
@@ -498,14 +542,13 @@ class Cohort(GeoAgent):
         for a in other_cohorts:
             if a.unique_id != self.unique_id:
                 if self.shape.intersection(a.shape).area > self.max_intersection_prob * self.shape.area:
-                    return False
+
+                    return False   
         return True
             
             
             
     
-
-
 
 class Classroom(GeoAgent):
     
@@ -519,79 +562,191 @@ class Classroom(GeoAgent):
     
     def __init__(self, unique_id, model, shape, room_type):
         super().__init__(unique_id, model, shape)
+        self.occupants = []
+        self.aerosol_transmission_rate = []
         #self.occupants = occupants #List of all occupants in a classroom
         #self.barrier = barrier_type
         self.room_type = room_type
+        self.seating_pattern = None
         self.viral_load = 0
         self.prob_move = False
         self.schedule_id = None
+        self.environment = 'open_windows'
+        self.floor_area = shape.area
+        self.height = 12
+
     
     def step(self):
         # roll weighted probability for current step having in-class activity
         self.prob_move = np.random.choice([True, False], p = [0.2, 0.8])
-        
-        
-        # UPDATE 10/16: move aerosal update entirely to room object, better for future room volume inclusion
-        # TODO: this aerosal version is very immature! 
-        
-        occupants = [a for a in list(self.model.grid.get_intersecting_agents(self)) if issubclass(type(a), Human)]
-        # this upates room viral_load to an arbitrary that's scaled with num of covid patients and area of room
-        # should change to volume of room later
-        self.viral_load += len([a for a in occupants if a.health_status != "healthy"])/self.shape.area
-        
-        
+
+                
         if self.model.schedule_type != "Simultaneous":
             self.advance()
         
         
         
+        
     def advance(self):
-        # Don't run anything at this point
-        # intended for aerosal transmission
-        '''
-        for agent in occupants:
-            ### TODO: check literature for aerosal infection ###
-            if issubclass(type(agent), Human):
-                prob_exposed = self.viral_load/100
-                
-                if agent.mask:
-                    prob_exposed -= 0.1 # particularly here mask effect on room aerosal transmission
-                    if prob_exposed < 0: 
-                        prob_exposed = 0
-                
-                if np.random.choice([True, False], p = [prob_exposed, 1-prob_exposed]):
-                    agent.health_status = 'exposed'
-        '''
+        """
+            #TODO: needs comment
+        """
+        occupants = [a for a in list(self.model.grid.get_intersecting_agents(self)) if issubclass(type(a), Human)]
+        exposed = [a for a in occupants if a.health_status != "healthy"]
+        exposed = [a for a in exposed if a.infective]
 
-                    
+        num_occupants = len(occupants)
+        num_exposed = len(exposed)
+
+        exposure_time = 5/60
+
+        mean_breathing_rate = np.mean([trans_rate.return_breathing_flow_rate(a.breathing_rate) for a in occupants])
+        mean_infectivity = np.mean([trans_rate.return_exhaled_air_inf(a.breathing_activity) for a in occupants])
+        ACH = trans_rate.return_air_exchange_rate(self.environment)
+        floor_area = self.floor_area
         
-        # ventilation natrually
-        ### TODO: check literature for aerosal infection ###
-        self.viral_load = max(self.viral_load-0.002, 0)
         
-        if self.schedule_id is not None:
-            if "classroom" in self.room_type:
-                if self.model.activity[self.schedule_id] != 'class':
-                    self.ventilate()
-        elif (self.room_type == 'lunch_room') and (not ('lunch' in self.model.activity.to_numpy())):
-            self.ventilate()
+        # TODO: take mean of mask_prob of all human agents in the room
+        #mask_passage_prob = 1 - return_mask_passage_prob()
+        mask_passage_prob = 0
+        height = self.height
+
+
+        transmission_rate = aerosol_new.return_aerosol_transmission_rate(floor_area=floor_area, room_height=height,
+        air_exchange_rate=ACH, aerosol_filtration_eff=0, relative_humidity=0.69, breathing_flow_rate=mean_breathing_rate, exhaled_air_inf=mean_infectivity,
+        mask_passage_prob=mask_passage_prob)
+
+        transmission_rate *= exposure_time
+        transmission_rate *= num_exposed #To be changed to some proportion to get infectious
+        transmission_rate *= (num_occupants - num_exposed)
+
+        transmission_rate = transmission_rate/num_occupants
+
+
+
+        self.aerosol_transmission_rate.append(transmission_rate)
+        
+
+        
+
+        
+    def generate_desks(self, shape, radius_desk=5, spacing_desk=5):
+        
+        desks = []
+        minx, miny, maxx, maxy = shape.bounds
+
+        # Starting from left to right start assigning centers of desks
+        x_start, y_start = minx + radius_desk, maxy - radius_desk
+        
+        # Small offsets to account for imperfect corners in digitization.
+        x_start += 0.2
+        y_start -= 0.2
+
+        # Create the desks using the right buffers.
+        desk = Point(x_start, y_start).buffer(radius_desk)
+        net_space = radius_desk + spacing_desk
+        
+        x_coordinate = x_start
+        y_coordinate = y_start
+        
+        # Loop to create the desks
+        while True:
+            desks.append(desk)        
             
+            x_coordinate += net_space
+            
+            if (y_coordinate < miny) and (x_coordinate > maxx):         
+                break
+                        
+            if x_coordinate > maxx:
+                x_coordinate -= net_space
+                x_coordinate = x_start 
+                y_coordinate = y_coordinate - net_space
+                
+            
+            desk = Point(x_coordinate, y_coordinate).buffer(radius_desk)    
         
-    def ventilate(self):
-        ### TODO: check literature for aerosal infection ###
-        self.viral_load = max(self.viral_load-0.05, 0)
+        desks = gpd.GeoSeries(desks)
+
+        # Figure out the desks which intersect the classroom and reject those. 
+        # Note that we do not use contains operation. 
+
+        desks  = desks[desks.apply(lambda desk: shape.intersects(desk))]
         
+        return desks
+
+
+    def generate_seats_circular(self, shape, desks, N, num_children_per_desk=5):
+
+        # Helper function to help generate seat positions given a set of desks.
+        def return_coords(desk, num_children_per_desk):
+            boundary = list(desk.boundary.coords)
+            step = len(boundary) // num_children_per_desk
+            boundary = pd.Series(boundary[::step])
+            boundary = boundary[:num_children_per_desk]
+            return boundary.apply(Point).values.tolist() 
+
+        # Return results using efficient vectorized apply functions.
+        result = desks.apply(return_coords, args=(num_children_per_desk,))
+        dataframe = pd.DataFrame((desks, result)).T
+        dataframe = dataframe.rename({0:'desk', 1:'seats'}, axis=1)
+        desk_series = dataframe.apply(lambda row: [row['desk'] for i in range(len(row['seats']))], axis=1)
         
-    def generate_seats(self, N, width):
+        desk_series = desk_series.sum()
+        result = result.sum()
+        
+        final_df = pd.DataFrame()
+        final_df['desk'] = desk_series
+        final_df['seat'] = result
+        
+        final_df['desk_id'] = final_df['desk'].apply(str)
+        
+        #Check those seats which are extremely close to the boundary and retain them. This is to compensate for digitization errors.
+        to_drop = final_df[(gpd.GeoSeries(final_df['seat']).distance(shape) >= 0.1) & (~final_df['seat'].apply(lambda seat: shape.contains(seat)))].drop_duplicates(subset=['desk_id'])
+        to_drop = to_drop.desk_id.values
+        
+        self.num_children_per_desk = num_children_per_desk
+
+        # Only return N seating positions.
+        return final_df[~final_df.desk_id.isin(to_drop)][:N]
+
+
+    def generate_seats(self, N, width, style='individual', num_children_per_desk=None):
+        
+        self.seating_pattern = style
         self.seats = []
-        center = self.shape.centroid
-        md = math.ceil(N**(1/2))
-        pnt = Point(center.x - width*md//2, center.y - width*md//2)
-        for i in range(md):
-            for j in range(md+1):
-                self.seats.append(Point(pnt.x + i*width, pnt.y + j*width))
+        shape = self.shape
+        
+        
+        # generate grid seating that seperates each student by fixed amount
+        if style == 'individual':         
+            center = shape.centroid
+            md = math.ceil(N**(1/2))
+            pnt = Point(center.x - width*md//2, center.y - width*md//2)
+            for i in range(md):
+                for j in range(md+1):
+                    self.seats.append(Point(pnt.x + i*width, pnt.y + j*width))
+        
+        
+        # generate circular seating
+        elif style == 'circular':
+            
+            # set default to number of children per desk
+            if not num_children_per_desk:
+                num_children_per_desk = 5
+            
+    
+            # while loop to accomandate all children if seats genereated by default is not enough 
+            # UPDATE 2/18: moved from school to classroom
+            
+            while len(self.seats) < N:
+                dataframe_seats_desks = self.generate_seats_circular(shape, self.generate_desks(shape), N, num_children_per_desk=num_children_per_desk)
+                self.seats = dataframe_seats_desks.seat.tolist()
+                num_children_per_desk += 1
                 
-                
+            
+            self.desks = dict(dataframe_seats_desks[['desk_id', 'desk']].drop_duplicates(['desk_id']).set_index('desk_id')['desk'])
+                                
     def generate_seats_lunch(self, xwidth, ywidth):
         
         self.seats = []
@@ -614,21 +769,14 @@ class Classroom(GeoAgent):
         np.random.shuffle(self.seats)
         
         
-    
 
 
 class School(Model):
-
     
-    
+        
     schedule_types = {"Sequential": BaseScheduler,
                       "Random": RandomActivation,
                       "Simultaneous": SimultaneousActivation}
-    
-    
-    
-    
-
 
     
     def __init__(self, map_path, schedule_path, grade_N, KG_N, preschool_N, special_education_N, 
@@ -822,7 +970,8 @@ class School(Model):
             
             
             
-        
+
+
         def init_agents(room_type, N, partition=False):
             '''
             batch initialize human agents into input room type rooms with equal partition size
@@ -853,22 +1002,46 @@ class School(Model):
             all_students = []
             for i, classroom in zip(range(len(rooms)), rooms):
                 
-                classroom.generate_seats(class_size, self.seat_dist)
-                classroom.schedule_id = self.schedule_ids[i//partition_size]
                 
+                
+                                
                 # spread remaining student into all classrooms
                 c_size = class_size
                 if remaining_size > 0:
                     remaining_size -= 1
                     c_size += 1
+                    
+                    
                 
+                #each classroom has its own possibility to have circular desks instead of normal grid seating
+                #TODO: strongly believe this is subject to change
+                prob_circular = eval(population_config['circular_desk_prob'])
+                
+                if np.random.choice([True, False], p=[prob_circular, 1-prob_circular]):
+                    classroom.generate_seats(c_size, self.seat_dist, style='circular')
+                else:
+                    classroom.generate_seats(c_size, self.seat_dist)
+                
+                
+                classroom.schedule_id = self.schedule_ids[i//partition_size]
+
+                
+            
+
                 #track students within the same room
                 students = []
-                for idx in range(c_size):                    
+                for idx in range(c_size): 
                     pnt = classroom.seats[idx]
                     mask_on = np.random.choice([True, False], p=[mask_prob, 1-mask_prob])
                     agent_point = Student(model=self, shape=pnt, unique_id="S"+str(self.__student_id), room=classroom, mask_on=mask_on)
                     
+                    
+                    
+                    if classroom.seating_pattern == 'circular':
+                        desks = gpd.GeoSeries(classroom.desks)
+                        agent_point.desk = desks[desks.distance(agent_point.shape).sort_values().index[0]]
+                        
+                        
                     self.grid.add_agents(agent_point)
                     self.schedule.add(agent_point)
                     self.__student_id += 1
@@ -881,9 +1054,14 @@ class School(Model):
                 #add teacher to class
                 pnt = generate_random(classroom.shape)
                 agent_point = Teacher(model=self, shape=pnt, unique_id="T"+str(self.__teacher_id), room=classroom)
+                
+                ######ALL TEACHERS VACCINATED#####
+                agent_point.vaccinated = True
+                ##################################
+                
+                
                 self.grid.add_agents(agent_point)
                 self.schedule.add(agent_point)
-                self.idle_teachers.append(agent_point)
                 self.__teacher_id += 1
                 self.__faculty_N -= 1
                 
@@ -924,9 +1102,12 @@ class School(Model):
                 agent_point = Teacher(model=self, shape=pnt, unique_id="T" + str(self.__teacher_id), room=f_lounge)
                 self.grid.add_agents(agent_point)
                 self.schedule.add(agent_point)
+                
+                #teacher from faculty lounge can be used later if on duty teachers test positive
+                self.idle_teachers.append(agent_point) 
+                
                 self.__teacher_id += 1
-        
-        #self.people = list(self.schedule.agents)
+
         
         # add rooms to scheduler at last 
         for room in self.room_agents:
@@ -934,35 +1115,37 @@ class School(Model):
             
             
             
+         
+            
             
         self.lunchroom = find_room_type(self.room_agents, 'lunch_room')[0]
-        self.lunchroom.generate_seats_lunch(3, 12)
+        self.lunchroom.generate_seats_lunch(1, 4)
             
-            
-            
-     
+    
+    
+    
     
     
     def small_step(self):
         self.schedule.step()
         self.grid._recreate_rtree() 
-        
-        
-        
+
+
+
     def add_N_patient(self, N): 
         patients = random.sample([a for a in self.schedule.agents if isinstance(a, Student)], N)
         for p in patients:
             p.health_status = "exposed"
             p.asymptomatic = True
             p.infective = True
-    
-    
+
+
     def show(self):
         '''
         plot current step visualization
         deprecated since end of model visualization update
         '''
-        
+
         # UPDATE 10/16: add deprecation warning
         message  = "this function is no longer used for performance issues, check output_image.py for end of model visualization"
         warnings.warn(message, DeprecationWarning)
@@ -975,23 +1158,37 @@ class School(Model):
         school_map.boundary.plot(ax = basemap, color='k', linewidth=0.2)
 
         list(map(lambda a: a.plot(), [a for a in self.schedule.agents if issubclass(type(a), Human)]))
-        
+
         hour = 9 + self.step_count*5//60 # assume plot start at 9am
         minute = self.step_count*5%60
         plt.title("Iteration: Day {}, ".format(self.day_count + 1) + "%d:%02d" % (hour, minute), fontsize=30)
 
-        
-    
+
+
     def __update_day(self):
         '''
-        update incubation time, reset viral_load, remove symptomatic agents, etc for end of day
+        update incubation time, reset viral_load, remove symptomatic agents, aerosol transmission etc for end of day
         '''
 
-        
+        for room in self.schedule.agents[:]:
+            if issubclass(type(room), Classroom):
+                mean_aerosol_transmissions = sum(room.aerosol_transmission_rate)
+                if np.isnan(mean_aerosol_transmissions):
+                    mean_aerosol_transmissions = 0
+
+                occupants = [a for a in list(self.grid.get_intersecting_agents(room)) if issubclass(type(a), Human)]
+                healthy_occupants = [a for a in occupants if a.health_status == 'healthy']
+                mean_aerosol_transmissions = math.ceil(mean_aerosol_transmissions)
+
+                to_expose = np.random.choice(healthy_occupants, size=mean_aerosol_transmissions)
+
+                for student in to_expose:
+                    student.health_status = 'exposed'
+
         for a in self.schedule.agents[:]:
             if issubclass(type(a), Human):
 
-                    
+
                 if a.symptoms:
                     # remove agent if symptom onset
                     if isinstance(a, Teacher):
@@ -1002,7 +1199,7 @@ class School(Model):
                         new_teacher.classroom = a.classroom
                     self.schedule.remove(a)
                     self.grid.remove_agent(a)
-                    
+
                 # UPDATE 10/16: infectious made obsolete, end of day update rework
                 elif a.health_status == "exposed":
                     # UPDATE 10/17: update infective delay if agent is not infective by end of day
@@ -1014,7 +1211,7 @@ class School(Model):
                             self.infected_count += 1
                         # update model stat for total infected
                         # negative countdown means this agent is asymptomatic
-                        
+
                         if not a.asymptomatic:
                             # this is a really small chance, however possible
                             # set symtoms to true
@@ -1024,25 +1221,27 @@ class School(Model):
             else:
                 # reset viral_load of room agents
                 a.viral_load = 0
-        
+
     def step(self):
         '''
         simulate a day with school day schedule
         '''
         if not self.schedule.steps:
             self.add_N_patient(self.init_patient)
-        
-        
-        
+
+
+
         for i, row in self.schoolday_schedule.iterrows():
             self.activity = row
             self.datacollector.collect(self)
             self.schedule.step()
             self.grid._recreate_rtree() 
             self.step_count += 1
-            
-            
+
+
         self.__update_day()  
         self.grid._recreate_rtree() 
-        self.day_count += 1        
         self.step_count = 0
+
+            
+            
