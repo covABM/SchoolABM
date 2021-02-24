@@ -77,6 +77,9 @@ def load_map_school1(file_path):
     school_gdf = school_gdf[['Id', 'room_type', 'geometry']]
     school_gdf.loc[len(school_gdf)] = [90000, 'recess_yard', grd_recess]
     school_gdf.loc[len(school_gdf)] = [90001, 'recess_yard', pkg_recess]
+    
+    #rescale map to feet unit
+    school_gdf.geometry = school_gdf.geometry.apply(lambda x: shapely.affinity.scale(x, xfact=0.37, yfact=0.37, origin=(0,0)))
     return school_gdf
 
 
