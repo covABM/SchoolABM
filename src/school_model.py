@@ -136,18 +136,24 @@ class Human(GeoAgent):
 
 
 
-    # dummy config for data collection
-    viral_load = None
+#     # dummy config for data collection
+#     viral_load = None
 
     shape, loc, scale = (float(incubation['shape']), float(incubation['loc']), float(incubation['scale']))
+    x = np.linspace(-10, 8, 19)
+    infective_df = pd.DataFrame({'x': list(x), 'gamma': list(stats.gamma.pdf(x, a=shape, loc=loc, scale=scale))})
+    
+    ## TODO: Once Humans are in a separate .py file
+    # i.e. each agent type has different file
+    ## 
 
-    # infectious curve
-    range_data = list(range(int(incubation['lower_bound']), int(incubation['upper_bound']) + 1))
-    infective_df = pd.DataFrame(
-        {'x': range_data,
-         'gamma': list(stats.gamma.pdf(range_data, a=shape, loc=loc, scale=scale))
-        }
-    )
+#     # infectious curve
+#     range_data = list(range(int(incubation['lower_bound']), int(incubation['upper_bound']) + 1))
+#     infective_df = pd.DataFrame(
+#         {'x': range_data,
+#          'gamma': list(stats.gamma.pdf(range_data, a=shape, loc=loc, scale=scale))
+#         }
+#     )
 
 
     def __init__(self, unique_id, model, shape, room, health_status = 'healthy'):
@@ -170,7 +176,6 @@ class Human(GeoAgent):
         
         shape, loc, scale =  (0.6432659248014824, -0.07787673726582335, 4.2489459496009125)
         x = np.linspace(0, 17, 1000)
-#         countdown_curve = stats.lognorm(s=shape, loc=loc, scale=scale)
         
         # initialize base transmission rate for infected students
         if self.health_status != 'healthy':
@@ -180,11 +185,9 @@ class Human(GeoAgent):
             if temp < -10:
                 temp = 10
             
-            self.infected = int(np.round(stats.lognorm.rvs(shape, loc, scale, size=1)[0], 0))
+            self.time_to_symptom = int(np.round(stats.lognorm.rvs(shape, loc, scale, size=1)[0], 0))
         # create infectiveness reference dataframe
         shape, loc, scale = (20.16693271833812, -12.132674385322815, 0.6322296057082886)
-        x = np.linspace(-10, 8, 19)
-        infective_df = pd.DataFrame({'x': list(x), 'gamma': list(stats.gamma.pdf(x, a=shape, loc=loc, scale=scale))})
 
 
         # temp Mask Passage: 1 = no masks, .1 = cloth, .05 = N95
@@ -216,41 +219,33 @@ class Human(GeoAgent):
 
 
     def __update(self):
-        # UPDATE 2/17: Chu paper distance transmission implemented
-
-
-        # mask wearing reduces droplet transmission max range
+        '''
+        # treat every 'exposed' student as infectious, then calculate likelihood of infection using time_until_symptoms
+        
+        stepwise infection calculator for each unique individual in the simulation
+        
+        1. baseline transmission generated from temporal analysis papers ** cite
+        
+        2. distance multiplier calculated from Chu paper ** cite
+        
+        3. mask passage probability justified by MIT / Cambridge (who also use .1 for cloth and .05 for N95)
+        
+        4. time steps are 5 minutes: multiply by 5/60 to get transmission rate/5 minute steps rather than transmission rate/hour
+        
+        final infectivity calculation: 1 * 2 * 3 * 4   
+        
+        
+        '''
         # infection above max range is considered as aerosal transmission
         if self.mask and not (self.model.activity[self.room.schedule_id] == 'lunch'):
             neighbors = self.model.grid.get_neighbors_within_distance(self, int(parser_npi['MASKS']['infection_distance']))
         else:
             neighbors = self.model.grid.get_neighbors_within_distance(self, int(parser_npi['NO_NPI']['infection_distance']))
-        '''
-        if self.health_status == 'infectious':
-            #TODO: sliding Distance calculation for neighbor infection
-            # a scale for health status
-
-
-            # Loop through infected agent's neighbors that are within 3
-
-            for neighbor in neighbors:
-
-                ###
-                #temp value, replace this with distance -> viral load -> infection_prob calculation eventually
-                temp_prob = .857 # previous value used
-
-                # Check class is Human
-                if issubclass(type(neighbor), Human):
-
-                    infective_prob = np.random.choice ([True, False], p = [temp_prob, 1 - temp_prob])
-                    if infective_prob and self.__check_same_room(neighbor):
-                        neighbor.health_status = 'exposed'
-        '''
+        
 
 
 
-
-        if self.health_status == 'exposed' and self.infective:
+        if self.health_status == 'exposed' and self.infective: # if exposed
 
             # normalize symptom countdown value to infectious distribution value
             # 0 being most infectious
@@ -266,47 +261,41 @@ class Human(GeoAgent):
                 # Check class is Human
                 if issubclass(type(neighbor), Human):
                     
-                    if neighbor.unique_id != self.unique_id: # and is not infected infecting another infected
-                        # Calculate Transmission                
-                        agent_distance = self.shape.distance(neighbor.shape)
-                        time_ = self.infected
-                        transmission_b = infective_df[infective_df.x == -1 * time]['gamma']
-                        
-                        # Use Chu distance calculation ## see docs
-                        chu_distance_multiplier = 1/2.02
-                        distance_ = agent_distance * chu_distance_multiplier
-                        
-                        # temp Mask Passage: 1 = no masks, .1 = cloth, .05 = N95
-                        mask_passage_prob = .1
-                        
-                        # convert transmission rate / hour into transmission rate / step
-                        hour_to_fivemin_step = 5/60
-                        
-                        temp_prob = transmission_b * distance_ * mask_passage_prob * hour_to_fivemin_step
-                        # row a dice of temp_prob*dist_bias chance to expose other agent
+                    if (neighbor.unique_id != self.unique_id) and (neighbor.health_status !-: # and is not infected infecting another infected
+                        # Call Droplet transmission function
+                        temp_prob = droplet_infect(self, neighbor)
+                                                                   
                         infective_prob = np.random.choice ([True, False], p = [temp_prob, 1-temp_prob])
                         if infective_prob and self.__check_same_room(neighbor):
                             neighbor.health_status = 'exposed'
                             
                             
                    
-    def droplet_infect(infect_id, uninfect_id, infected, distance):
-        distance = get_distance(infect_id, uninfect_id, student_pos)
-        time = infected[infect_id]
+    def droplet_infect(infected, uninfected):
+        '''
+        baseline transmission rate
+        '''
+        
+        distance = infected.shape.distance(uninfected.shape)
+        time = infected.time_to_symptom
         transmission_baseline = infective_df[infective_df.x == -1 * time]['gamma']
+                                                                   
+     
+        # Use Chu distance calculation ## see docs
+        chu_distance_multiplier = 1/2.02
+        distance_multiplier = distance * chu_distance_multiplier                                                           
 
-
-
-
+        
         # approximate student time spent breathing vs talking vs loudly talking
         breathing_type_multiplier = np.random.choice([.1, .5, 1], p=[.2, .05, .75])
         # whisper, loud, heavy
 
-        mask_multiplier = mask_passage_prob # equivalent to aerosol masks
+        # temp Mask Passage: 1 = no masks, .1 = cloth, .05 = N95
+        mask_passage_prob = .1
+        mask_multiplier = mask_passage_prob # equivalent to cloth masks
 
         # convert transmission rate / hour into transmission rate / step
         hour_to_fivemin_step = 5/60
-        # test if necessary
 
         return transmission_baseline * distance_multiplier * breathing_type_multiplier * mask_multiplier * hour_to_fivemin_step
 
