@@ -1,6 +1,7 @@
 from mesa_geo import GeoAgent
 
 import util
+import transmission_rate as trans_rate
 
 from scipy import stats 
 
@@ -60,15 +61,6 @@ parser_npi.read(config_file_path_prefix + npi_params_ini)
 
 
 
-
-
-
-
-
-
-
-
-
 # infectious curve config
 ###################################### 
 # based on gamma fit of 10000 R code points
@@ -115,8 +107,11 @@ class Human(GeoAgent):
     
     def __init__(self, unique_id, model, shape, room, health_status = 'healthy'):
         super().__init__(unique_id, model, shape)
+        
         # mask setup
-        self.mask_type = None 
+        # defualt to no mask
+        self.mask_type = None
+        self.mask_passage_prob = trans_rate.return_mask_passage_prob(self.mask_type)
         
         # disease config
 
@@ -140,6 +135,7 @@ class Human(GeoAgent):
 
         lognormal_dist = stats.lognorm.rvs(shape, loc, scale, size=1)
 
+        
         num_days = max(int(countdown['lower_bound']), 
                        min(np.round(lognormal_dist, 0)[0], 
                            int(countdown['upper_bound'])))# failsafe to avoid index overflow
@@ -147,11 +143,15 @@ class Human(GeoAgent):
         #######################################
         
         
+        # breathing attributes for transmission models
+        self.breathing_rate = None
+        self.breathing_activity = None
 
         
         self.room = room
         self.x = self.shape.x
         self.y = self.shape.y
+        
         
         
 
@@ -172,13 +172,16 @@ class Human(GeoAgent):
 
         # mask wearing reduces droplet transmission max range
         # infection above max range is considered as aerosal transmission
+
         
+        #if self.mask and not (self.model.activity[self.room.schedule_id] == 'lunch'):
         
-        # TODO: Bailey 
-        if self.mask and not (self.model.activity[self.room.schedule_id] == 'lunch'):
-            neighbors = self.model.grid.get_neighbors_within_distance(self, int(parser_npi['MASKS']['infection_distance']))
-        else:
-            neighbors = self.model.grid.get_neighbors_within_distance(self, int(parser_npi['NO_NPI']['infection_distance']))
+        # chu distance multiplier would be < 0.001 above 30 feet for infection
+        max_infect_dist = 30
+        neighbors = self.model.grid.get_neighbors_within_distance(self, max_infect_dist)
+        
+        #else:
+        #    neighbors = self.model.grid.get_neighbors_within_distance(self, int(parser_npi['NO_NPI']['infection_distance']))
 
         
 
@@ -187,27 +190,17 @@ class Human(GeoAgent):
                         
         if self.health_status == 'exposed' and self.infective:
 
-            # normalize symptom countdown value to infectious distribution value
-            # 0 being most infectious
-            # either -10 or 8 is proven to be too small of a chance to infect others, thus covering asympotmatic case
 
 
-            countdown_norm = min(int(incubation['upper_bound']), max(int(incubation['lower_bound']), 0 - self.symptom_countdown))
-            temp_prob = infective_df[infective_df['x'] == countdown_norm]['gamma'].iloc[0]
-
-            
             for neighbor in neighbors:
 
-                # Check class is Human                            
-                if issubclass(type(neighbor), Human):
+                # Check class is Human and are within the same room                           
+                if issubclass(type(neighbor), Human) and self.__check_same_room(neighbor) :
                     if neighbor.unique_id != self.unique_id and (neighbor.health_status == 'healthy'):                   
                         # Call Droplet transmission function
                         temp_prob = self.droplet_infect(self, neighbor)
-                        try:
-                            infective_prob = np.random.choice ([True, False], p = [temp_prob, 1-temp_prob])
-                        except:
-                            print(temp_prob)
-                        if infective_prob and self.__check_same_room(neighbor) and not self.vaccinated:
+                        infective_prob = np.random.choice ([True, False], p = [temp_prob, 1-temp_prob])
+                        if infective_prob and not neighbor.vaccinated:
                             neighbor.health_status = 'exposed'
 
     
@@ -216,26 +209,49 @@ class Human(GeoAgent):
         '''
         baseline transmission rate
         '''
+        feet_to_meter = 1/3.2808
+        distance = infected.shape.distance(uninfected.shape)*feet_to_meter
         
-        distance = infected.shape.distance(uninfected.shape)
-        time = infected.symptom_countdown
-        transmission_baseline = infective_df[infective_df.x == -1 * time]['gamma'].tolist()[0]
+        # normalize symptom countdown value to infectious distribution value
+        # 0 being most infectious
+        # either -10 or 8 is proven to be too small of a chance to infect others, thus covering asympotmatic case
+        
+        countdown_norm = min(int(incubation['upper_bound']), max(int(incubation['lower_bound']), 0 - infected.symptom_countdown))
+        transmission_baseline = infective_df[infective_df['x'] == countdown_norm]['gamma'].iloc[0]
 
      
         # Use Chu distance calculation ## see docs
         chu_distance_multiplier = 1/2.02
-        distance_multiplier = distance * chu_distance_multiplier                                                           
+        distance_multiplier = (chu_distance_multiplier)**distance                                                        
 
         
         # approximate student time spent breathing vs talking vs loudly talking
-        breathing_type_multiplier = np.random.choice([.1, .5, 1], p=[.2, .05, .75])
-        # whisper, loud, heavy
+        # upperbound baseline (worst case) for breathing activity is moderate_excercise and talking loud
+        base_bfr = trans_rate.return_breathing_flow_rate('moderate_exercise')
+        base_eai = trans_rate.return_exhaled_air_inf('talking_loud')
+        
+        
+        inf_bfr_mult = trans_rate.return_breathing_flow_rate(infected.breathing_rate)/base_bfr 
+        inf_eai_mult = trans_rate.return_exhaled_air_inf(infected.breathing_activity)/base_eai
+        
+        uninf_bfr_mult = trans_rate.return_breathing_flow_rate(uninfected.breathing_rate)/base_bfr 
+        
+        # take average of breathing flow rate of two agents
+        bfr_multiplier = np.mean([inf_bfr_mult, uninf_bfr_mult])
+        # we dont think the uninfected air exahale rate should be a factor here 
+        breathing_type_multiplier = bfr_multiplier*inf_eai_mult
+        
+        
 
-        # temp Mask Passage: 1 = no masks, .1 = cloth, .05 = N95
-        # TODO: adjust accordingly to mask setup
-        mask_passage_prob = .1
-        mask_multiplier = mask_passage_prob # equivalent to cloth masks
+        # Mask Passage: 1 = no masks, .1 = cloth, .05 = N95
+        mask_multiplier = np.mean([infected.mask_passage_prob, uninfected.mask_passage_prob])
 
+        
+        # Lunch special case: mask off during lunch time
+        if infected.model.activity[infected.room.schedule_id] == 'lunch':
+            mask_multiplier = 1
+            
+        
         # convert transmission rate / hour into transmission rate / step
         hour_to_fivemin_step = 5/60
 
@@ -321,8 +337,21 @@ class Student(Human):
         student_viz_params = parser['STUDENT']
 
         self.grade = self.room.room_type.replace('classroom_', '')
-        self.mask = mask_on       
-        self.mask_type = None 
+        
+        
+        # mask setup
+        self.mask = mask_on      
+        mask_probs = [eval(parser_npi['MASK_PROB']['cotton']), 
+                      eval(parser_npi['MASK_PROB']['multilayer']),
+                      eval(parser_npi['MASK_PROB']['surgical']),
+                      eval(parser_npi['MASK_PROB']['n95'])]
+        if mask_on:
+            self.mask_type = np.random.choice(['Cotton', 'Multilayer', 'Surgical', 'N95'], p = mask_probs)
+        else:
+            self.mask_type = None
+        self.mask_passage_prob = trans_rate.return_mask_passage_prob(self.mask_type)
+        
+        
         self.seat = Point(self.shape.x, self.shape.y)
         self.marker = student_viz_params['marker']
         
@@ -361,12 +390,23 @@ class Student(Human):
                 self.breathing_rate = 'resting'
                 
                 #TODO: The probability should be in init file
-                self.breathing_activity = np.random.choice(['talking_whisper', 'talking_loud', 'breathing_heavy'], p=[0.2, 0.05, 0.75])
+                self.breathing_activity = np.random.choice(
+                    ['talking_whisper', 'talking_loud', 'breathing_heavy'], 
+                    p=[0.2, 0.05, 0.75]
+                )
 
                 
             if self.room.prob_move:
-                # TODO: this should change breathing activity prob slightly
                 self.out_of_place = True
+                
+                #TODO: The probability should be in init file
+                self.breathing_rate = 'light_exercise'
+                self.breathing_activity = np.random.choice(
+                    ['talking_whisper', 'talking_normal', 'talking_loud', 'breathing_heavy'], 
+                    p=[0.05, 0.2, 0.6, 0.15]
+                )
+                
+                
                 self._Human__move()
             else:
                 if self.out_of_place:
@@ -378,8 +418,17 @@ class Student(Human):
         # case 2: student in recess            
         elif activity == 'recess':
             
-            self.breathing_rate = 'NA'
+            #TODO: The probability should be in init file
+            self.breathing_rate = np.random.choice(
+                ['resting', 'moderate_exercise', 'light_exercise'],
+                p = [0.2, 0.5, 0.3]
+            )
             
+            self.breathing_activity = np.random.choice(
+                ['talking_whisper', 'talking_normal', 'talking_loud', 'breathing_heavy'], 
+                p=[0.05, 0.2, 0.6, 0.15]
+            )
+
             
             if self.prev_activity != activity:
                 self.update_shape(util.generate_random(self.cohort.shape))
@@ -444,15 +493,25 @@ class Student(Human):
 class Teacher(Human):
     def __init__(self, unique_id, model, shape, room, health_status = 'healthy',mask_on=True):
         super().__init__(unique_id, model, shape, room, health_status)
-        self.mask = mask_on
-        self.mask_type = None
+        
+        
+        # mask setup
+        self.mask = mask_on      
+        mask_probs = [eval(parser_npi['MASK_PROB']['cotton']), 
+                      eval(parser_npi['MASK_PROB']['multilayer']),
+                      eval(parser_npi['MASK_PROB']['surgical']),
+                      eval(parser_npi['MASK_PROB']['n95'])]
+        if mask_on:
+            self.mask_type = np.random.choice(['Cotton', 'Multilayer', 'Surgical', 'N95'], p = mask_probs)
+        else:
+            self.mask_type = None
+        self.mask_passage_prob = trans_rate.return_mask_passage_prob(self.mask_type)
+        
+        
+        
         self.classroom = self.room # TODO: for future development enabling Teachers to move to other room during non-class time
         self.breathing_rate = None
         self.breathing_activity = None
-        
-        
-        #TODO: vaccination should be parameterized
-        self.vaccinated = True
 
         viz_ini_file = 'vizparams.ini'
         parser = configparser.ConfigParser()
@@ -477,4 +536,3 @@ class Teacher(Human):
         self._Human__move()
                 
         
-

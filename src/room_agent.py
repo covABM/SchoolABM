@@ -2,6 +2,10 @@ from mesa_geo import GeoAgent
 
 import human_agent
 import util
+# Aerosol Transmission
+import aerosol_new
+import transmission_rate as trans_rate
+
 
 import math
 
@@ -25,9 +29,6 @@ import configparser
 #Plot
 import matplotlib.pyplot as plt
 
-# Aerosol Transmission
-import aerosol_new
-import transmission_rate as trans_rate
 
 # Prefix for config data
 #os.chdir(os.path.dirname(sys.path[0]))
@@ -39,8 +40,8 @@ school_params_ini = 'schoolparams.ini'
 parser_school = configparser.ConfigParser()
 parser_school.read(config_file_path_prefix + school_params_ini)
 population_config = parser_school['SCHOOL_POPULATION']
-
-
+school_intervention_params = parser_school['INTERVENTION']
+    
 
 class Classroom(GeoAgent):
     
@@ -63,10 +64,14 @@ class Classroom(GeoAgent):
         self.viral_load = 0
         self.prob_move = False
         self.schedule_id = None
-        self.environment = 'open_windows'
+        
+        
+        # volume
         self.floor_area = shape.area
         self.height = 12
 
+        # airflow ventiliation type
+        self.environment = eval(school_intervention_params['ventilation_type'])
     
     def step(self):
         # roll weighted probability for current step having in-class activity
@@ -83,6 +88,13 @@ class Classroom(GeoAgent):
         """
             #TODO: needs comment
         """
+        # UPDATE 3/1
+        # recess yards should have no airosol transmission
+        if self.room_type ==  'recess_yard':
+            transmission_rate = 0
+            self.aerosol_transmission_rate.append(transmission_rate)
+            return 
+            
         occupants = [a for a in list(self.model.grid.get_intersecting_agents(self)) if issubclass(type(a), human_agent.Human)]
         exposed = [a for a in occupants if a.health_status != "healthy"]
         exposed = [a for a in exposed if a.infective]
@@ -99,8 +111,7 @@ class Classroom(GeoAgent):
         
         
         # TODO: take mean of mask_prob of all human agents in the room
-        #mask_passage_prob = 1 - return_mask_passage_prob()
-        mask_passage_prob = 0
+        mask_passage_prob = np.mean([a.mask_passage_prob for a in occupants])
         height = self.height
 
 
@@ -259,5 +270,3 @@ class Classroom(GeoAgent):
             ycoords = y_pointer
             
         np.random.shuffle(self.seats)
-        
-        
