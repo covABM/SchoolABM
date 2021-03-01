@@ -38,11 +38,11 @@ def return_mask_passage_prob(mask_passage_prob):
     elif mask_passage_prob == 'Cotton':
         mask_passage_prob = 0.5
     elif mask_passage_prob == 'Multilayer':
-        mask_passage_prob = 0.7
+        mask_passage_prob = 0.3
     elif mask_passage_prob == 'Surgical':
-        mask_passage_prob = 0.9
+        mask_passage_prob = 0.1
     elif mask_passage_prob == 'N95':
-        mask_passage_prob = 0.95
+        mask_passage_prob = 0.05
 
     return mask_passage_prob
 
