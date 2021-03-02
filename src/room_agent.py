@@ -55,7 +55,7 @@ class Classroom(GeoAgent):
     
     def __init__(self, unique_id, model, shape, room_type):
         super().__init__(unique_id, model, shape)
-        self.occupants = []
+        #self.occupants = []
         self.aerosol_transmission_rate = []
         #self.occupants = occupants #List of all occupants in a classroom
         #self.barrier = barrier_type
@@ -96,12 +96,12 @@ class Classroom(GeoAgent):
             return 
             
         occupants = [a for a in list(self.model.grid.get_intersecting_agents(self)) if issubclass(type(a), human_agent.Human)]
-        exposed = [a for a in occupants if a.health_status != "healthy"]
-        exposed = [a for a in exposed if a.infective]
+        exposed = [a for a in occupants if a.infective]
 
         num_occupants = len(occupants)
         num_exposed = len(exposed)
 
+        # change accordingly (bus in 1 minute step size: 1/60)
         exposure_time = 5/60
 
         mean_breathing_rate = np.mean([trans_rate.return_breathing_flow_rate(a.breathing_rate) for a in occupants])
