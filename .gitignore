@@ -2,6 +2,8 @@
 token.pickle
 credentials.json
 
+# sensitive map files
+layouts/
 
 
 

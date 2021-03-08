@@ -1,6 +1,5 @@
 import sys
 import os
-import sys
 
 sys.path.append('./src')
 os.chdir(sys.path[0])
@@ -9,23 +8,14 @@ os.chdir(sys.path[0])
 
 # data Analysis 
 import geopandas as gpd
-import pandas as pd
-import numpy as np
+
 
 
 
 # plot
 import matplotlib.pyplot as plt
 import seaborn as sns
-import gc
 
-# output
-from output_image import write_output, analyze_model_result, output_to_csv
-
-
-# multiprocessing
-import multiprocessing
-import brun
 
 
 # model
@@ -55,17 +45,16 @@ special_education_N = int(school_population['special_education_N'])
 faculty_N = int(school_population['faculty_N'])
 #####################
 
-seat_dist = 12
+seat_dist = 5
 mask_prob = 0.516
 days = 5
 max_steps = days*schedule_steps
-iterations = 1
 
 school = School(map_path, schedule_path, grade_N, KG_N, preschool_N, special_education_N, 
-                 faculty_N, seat_dist, init_patient=3, attend_rate=1, mask_prob=0.5, inclass_lunch=True, username="xyzabc")
+                 faculty_N, seat_dist, init_patient=3, attend_rate=1, mask_prob=mask_prob, inclass_lunch=True)
 
 
-while school.running and school.schedule.steps < 1:
+while school.running and school.schedule.steps < max_steps:
     school.step()
 
 params = "{'test': 0}" 

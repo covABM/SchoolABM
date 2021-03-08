@@ -109,8 +109,15 @@ class School(Model):
         
         
         school_gdf = gpd.read_file(map_path)
+        # minx miny maxx maxy
+        # use minx maxy
+        # gdf.dessolve 
+        # minx miny maxx maxy = geometery.bounds
 
-
+        # for loop:
+        #   bus = bus(shape(minx,maxy))
+        #    minx = minx - width
+        #    maxy = maxy + length
 
         
         
@@ -532,14 +539,18 @@ class School(Model):
                     mean_aerosol_transmissions = 0
 
                 occupants = [a for a in list(self.grid.get_intersecting_agents(room)) if issubclass(type(a), human_agent.Human)]
-                healthy_occupants = [a for a in occupants if a.health_status == 'healthy']
-                mean_aerosol_transmissions = math.ceil(mean_aerosol_transmissions)
-
-                to_expose = np.random.choice(healthy_occupants, size=mean_aerosol_transmissions)
-
-                for student in to_expose:
-                    student.health_status = 'exposed'
+                healthy_occupants = [a for a in occupants if a.health_status == 'healthy']                  
                     
+                # failsafe for rare case where this can exceed one
+                mean_aerosol_transmissions = min(mean_aerosol_transmissions, 1)
+                
+                # treating aerosal transmissions as a probability for each healthy occupant in this room to get sick
+                
+                for healthy_occupant in healthy_occupants:
+                    if np.random.choice([True, False], p =[mean_aerosol_transmissions, 1-mean_aerosol_transmissions]):
+                        if not healthy_occupant.vaccinated:
+                            healthy_occupant.health_status = 'exposed'
+                        
                     
     def step(self):
         '''

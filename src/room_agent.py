@@ -121,10 +121,7 @@ class Classroom(GeoAgent):
 
         transmission_rate *= exposure_time
         transmission_rate *= num_exposed #To be changed to some proportion to get infectious
-        transmission_rate *= (num_occupants - num_exposed)
-
-        transmission_rate = transmission_rate/num_occupants
-
+        
 
 
         self.aerosol_transmission_rate.append(transmission_rate)
