@@ -22,17 +22,3 @@ def return_aerosol_transmission_rate(floor_area, room_height,
     return airb_trans_rate #This is mean number of transmissions per hour between a single pair of infected / healthy individuals
 
 
-def aerosol_infection_probability(classroom, interventions=None):
-    #Calculate mean breathing rate of kids in the room (activity dependent)
-    
-    #Calculate mean viral exhalation rate in the room 
-    
-    #Choose specific intervention pattern
-    
-    #Pass parameters along to return_aerosol_transmission_rate function
-    
-    #Multiply probability by the number of infected individuals in the room.
-    
-    # Return number/infect
-    pass
-    

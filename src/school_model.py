@@ -51,17 +51,6 @@ cohort_config = parser_school['COHORT']
 
 
 
-
-
-
-
-
-
-
-
-
-
-
 class School(Model):
     
         
@@ -72,7 +61,9 @@ class School(Model):
     
     def __init__(self, map_path, schedule_path, grade_N, KG_N, preschool_N, special_education_N, 
                  faculty_N, seat_dist, init_patient=3, attend_rate=1, mask_prob=0.516, 
-                 inclass_lunch=False, schedule_type="Simultaneous"):
+                 inclass_lunch=False, student_vaccine_prob = 0, student_testing_freq = 14,
+                 teacher_vaccine_prob = 1, teacher_testing_freq = 7, teacher_mask = 'N95', 
+                 schedule_type="Simultaneous"):
         # zipcode etc, for access of more realistic population from KG perhaps
         
         
@@ -83,6 +74,11 @@ class School(Model):
         self.seat_dist = math.ceil(seat_dist/(attend_rate**(1/2)))
         self.idle_teachers = [] # teachers to be assigned without a classroom
         self.init_patient = init_patient
+        
+        
+        # testing param init
+        self.teacher_testing_freq = teacher_testing_freq
+        self.student_testing_freq = student_testing_freq
 
         
         
@@ -113,8 +109,15 @@ class School(Model):
         
         
         school_gdf = gpd.read_file(map_path)
+        # minx miny maxx maxy
+        # use minx maxy
+        # gdf.dessolve 
+        # minx miny maxx maxy = geometery.bounds
 
-
+        # for loop:
+        #   bus = bus(shape(minx,maxy))
+        #    minx = minx - width
+        #    maxy = maxy + length
 
         
         
@@ -134,7 +137,7 @@ class School(Model):
         # stats tracking init
         self.infected_count = 0
         self.step_count = 0
-        self.day_count = 0
+        self.day_count = 1
         self.num_exposed = 0
         
         
@@ -325,7 +328,8 @@ class School(Model):
                     pnt = classroom.seats[idx]
                     mask_on = np.random.choice([True, False], p=[mask_prob, 1-mask_prob])
                     agent_point = human_agent.Student(model=self, shape=pnt, unique_id="S"+str(self.__student_id), room=classroom, mask_on=mask_on)
-                    
+                    # vaccinate students accordingly
+                    agent_point.vaccinated = np.random.choice([True, False], p = [student_vaccine_prob, 1- student_vaccine_prob])
                     
                     
                     if classroom.seating_pattern == 'circular':
@@ -345,6 +349,11 @@ class School(Model):
                 #add teacher to class
                 pnt = util.generate_random(classroom.shape)
                 agent_point = human_agent.Teacher(model=self, shape=pnt, unique_id="T"+str(self.__teacher_id), room=classroom)
+                
+                # teacher mask/vaccination protocol 
+                agent_point.vaccinated = np.random.choice([True, False], p = [teacher_vaccine_prob, 1- teacher_vaccine_prob])
+                agent_point.mask_type = teacher_mask
+                agent_point.mask_passage_prob = trans_rate.return_mask_passage_prob(teacher_mask)
                 
                 
                 self.grid.add_agents(agent_point)
@@ -387,6 +396,12 @@ class School(Model):
 
                 pnt = util.generate_random(f_lounge.shape)
                 agent_point = human_agent.Teacher(model=self, shape=pnt, unique_id="T" + str(self.__teacher_id), room=f_lounge)
+                
+                # teacher mask/vaccination protocol 
+                agent_point.vaccinated = np.random.choice([True, False], p = [teacher_vaccine_prob, 1- teacher_vaccine_prob])
+                agent_point.mask_type = teacher_mask
+                agent_point.mask_passage_prob = trans_rate.return_mask_passage_prob(teacher_mask)
+                
                 self.grid.add_agents(agent_point)
                 self.schedule.add(agent_point)
                 
@@ -448,7 +463,7 @@ class School(Model):
 
         hour = 9 + self.step_count*5//60 # assume plot start at 9am
         minute = self.step_count*5%60
-        plt.title("Iteration: Day {}, ".format(self.day_count + 1) + "%d:%02d" % (hour, minute), fontsize=30)
+        plt.title("Iteration: Day {}, ".format(self.day_count) + "%d:%02d" % (hour, minute), fontsize=30)
 
 
 
@@ -456,29 +471,13 @@ class School(Model):
         '''
         update incubation time, reset viral_load, remove symptomatic agents, aerosol transmission etc for end of day
         '''
-
-        for room in self.schedule.agents[:]:
-            if issubclass(type(room), room_agent.Classroom):
-                mean_aerosol_transmissions = sum(room.aerosol_transmission_rate)
-                if np.isnan(mean_aerosol_transmissions):
-                    mean_aerosol_transmissions = 0
-
-                occupants = [a for a in list(self.grid.get_intersecting_agents(room)) if issubclass(type(a), human_agent.Human)]
-                healthy_occupants = [a for a in occupants if a.health_status == 'healthy']
-                mean_aerosol_transmissions = math.ceil(mean_aerosol_transmissions)
-
-                to_expose = np.random.choice(healthy_occupants, size=mean_aerosol_transmissions)
-
-                for student in to_expose:
-                    student.health_status = 'exposed'
-
         for a in self.schedule.agents[:]:
+            # update human agent disease stats
             if issubclass(type(a), human_agent.Human):
-
 
                 if a.symptoms:
                     # remove agent if symptom onset
-                    if isinstance(a, human_agent.Teacher):
+                    if isinstance(a, human_agent.Teacher) and len(self.idle_teachers) > 0:
                         # assign a new teacher to position
                         new_teacher = self.idle_teachers.pop()
                         new_teacher.shape = a.shape
@@ -489,6 +488,29 @@ class School(Model):
 
                 # UPDATE 10/16: infectious made obsolete, end of day update rework
                 elif a.health_status == "exposed":
+                    
+                    # UPDATE 2/28: merge testing implementation 
+                    # test student and teacher accordingly
+                    # Q: why testing is here under exposed case?: 
+                    # testing only matters if infect the result is a hit
+                    # therefore the agnent gets removed only if two conditions are met
+                    # 1.testing is arranged; 2. testing result the agent is indeed exposed 
+                    if isinstance(a, human_agent.Teacher) and (self.day_count % self.teacher_testing_freq == 0):
+                        # if hit teacher, try to assign a new teacher to position
+                        if len(self.idle_teachers) > 0:
+                            new_teacher = self.idle_teachers.pop()
+                            new_teacher.shape = a.shape
+                            new_teacher.room = a.room
+                            new_teacher.classroom = a.classroom
+                        #remove teacher if testing conditions are met
+                        self.schedule.remove(a)
+                        self.grid.remove_agent(a)   
+
+                    elif isinstance(a, human_agent.Student) and (self.day_count % self.student_testing_freq == 0):
+                        #remove student if testing conditions are met
+                        self.schedule.remove(a)
+                        self.grid.remove_agent(a)   
+                    
                     # UPDATE 10/17: update infective delay if agent is not infective by end of day
                     a.infective = True
                     a.symptom_countdown -= 1
@@ -504,11 +526,32 @@ class School(Model):
                             # set symtoms to true
                             # next day this agent will be removed from the model
                             a.symptoms = True
+                            
+                            
+                            
+                
 
-            else:
-                # reset viral_load of room agents
-                a.viral_load = 0
+            # update room agent aerosal stats 
+            elif issubclass(type(a), room_agent.Classroom):
+                room = a
+                mean_aerosol_transmissions = sum(room.aerosol_transmission_rate)
+                if np.isnan(mean_aerosol_transmissions):
+                    mean_aerosol_transmissions = 0
 
+                occupants = [a for a in list(self.grid.get_intersecting_agents(room)) if issubclass(type(a), human_agent.Human)]
+                healthy_occupants = [a for a in occupants if a.health_status == 'healthy']                  
+                    
+                # failsafe for rare case where this can exceed one
+                mean_aerosol_transmissions = min(mean_aerosol_transmissions, 1)
+                
+                # treating aerosal transmissions as a probability for each healthy occupant in this room to get sick
+                
+                for healthy_occupant in healthy_occupants:
+                    if np.random.choice([True, False], p =[mean_aerosol_transmissions, 1-mean_aerosol_transmissions]):
+                        if not healthy_occupant.vaccinated:
+                            healthy_occupant.health_status = 'exposed'
+                        
+                    
     def step(self):
         '''
         simulate a day with school day schedule
@@ -528,6 +571,7 @@ class School(Model):
 
         self.__update_day()  
         self.grid._recreate_rtree() 
+        self.day_count += 1
         self.step_count = 0
 
             

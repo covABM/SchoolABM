@@ -6,3 +6,9 @@ As schools around San Diego county attempt to reopen amidst the COVID-19 pandemi
 
 # Model Details
 Fundamental agent-based simulations are carried out using [mesa-geo](https://github.com/Corvince/mesa-geo) and open source spatial libraries such as [geopandas](https://geopandas.org/)
+
+
+# TEST RUN INSTRUCTIONS
+* Start up a container with the image provided in the submission-methodology.json
+* Clone this git repository and navigate into the SchoolABM/ folder
+* To test, execute python run.py test, and you should be able to see the outputs.

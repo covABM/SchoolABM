@@ -6,11 +6,9 @@ def return_breathing_flow_rate(breathing_flow_rate):
         breathing_flow_rate = 2.3446349 #1.38 ft3/min
     elif breathing_flow_rate == 'light_exercise':
         breathing_flow_rate = 1.3761987 #0.8 ft3/min
-        
-    elif breathing_flow_rate == 'NA':
-        breathing_flow_rate = 0 #recess outdoor
-        
-
+    else:
+        breathing_flow_rate = 0
+     
     return breathing_flow_rate
 
 
@@ -60,5 +58,7 @@ def return_exhaled_air_inf(exhaled_air_inf):
 
     elif exhaled_air_inf == 'talking_normal':
         exhaled_air_inf = 72.0420386485 #q/m3
-
+    else:
+        exhaled_air_inf = 0
+        
     return exhaled_air_inf
